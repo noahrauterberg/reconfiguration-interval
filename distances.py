@@ -14,14 +14,14 @@ from simulation.simulation import Simulation
 sys.path.append(os.path.abspath(os.getcwd()))
 
 def run_simulation(steps: int, interval: float, planes: int, nodes: int, inc: float, altitude: int, name: str, results_folder: str):
-
     results_dir = os.path.join(results_folder, name)
     os.makedirs(results_dir, exist_ok=True)
 
     # setup simulation
-    s = Simulation(planes=planes, nodes_per_plane=nodes, inclination=inc, semi_major_axis=int(altitude + config.EARTH_RADIUS)*1000, earth_radius=int(config.EARTH_RADIUS * 1000), model=config.MODEL, animate=config.ANIMATE, report_status=config.DEBUG)
-    # for each timestep, run simulation
+    semi_major = int(altitude + config.EARTH_RADIUS)*1000 # semi-major axis in meters. Since we are only concerned with circular orbits, this is just the radius of the orbit = altitude + earth_radius
+    s = Simulation(planes=planes, nodes_per_plane=nodes, inclination=inc, semi_major_axis=semi_major, model=config.MODEL, animate=config.ANIMATE, report_status=config.DEBUG)
 
+    # for each timestep, run simulation
     total_steps = int(steps/interval)
     for step in tqdm.trange(total_steps, desc="simulating {}".format(name)):
     # for step in range(total_steps):
@@ -40,17 +40,5 @@ def run_simulation(steps: int, interval: float, planes: int, nodes: int, inc: fl
 if __name__ == "__main__":
     with concurrent.futures.ProcessPoolExecutor() as executor:
         for s in config.SHELLS:
-            PLANES = s["planes"]
-            # Number of nodes/plane
-            NODES = s["sats"]
-
-            # Plane inclination (deg)
-            INC = s["inc"]
-
-            # Orbit Altitude (Km)
-            ALTITUDE = s["altitude"]
-
-            NAME = s["name"]
-
-            # run_simulation(config.STEPS, config.INTERVAL, int(PLANES), int(NODES), float(INC), int(ALTITUDE), NAME, config.DISTANCES_DIR)
-            executor.submit(run_simulation, config.STEPS, config.INTERVAL, int(PLANES), int(NODES), float(INC), int(ALTITUDE), NAME, config.DISTANCES_DIR)
+            run_simulation(config.STEPS, config.INTERVAL, int(s["planes"]), int(s["sats"]), float(s["inc"]), int(s["altitude"]), s["name"], config.DISTANCES_DIR)
+            # executor.submit(run_simulation, config.STEPS, config.INTERVAL, int(s["planes"]), int(s["sats"]), float(s["inc"]), int(s["altitude"]), s["name"], config.DISTANCES_DIR)

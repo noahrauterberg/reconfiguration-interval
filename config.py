@@ -17,7 +17,7 @@ DEBUG = False
 # number of columns in the output terminal
 TERM_SIZE = 80
 
-# radius of earth in km
+# radius of earth in km -> this is the mean
 EARTH_RADIUS = 6371.0
 
 # model to use for satellite orbits
@@ -28,7 +28,8 @@ MODEL = "SGP4"
 INTERVAL = 1
 
 # total length of the simulation in seconds
-STEPS = 86400
+STEPS = 700 # a bit over one orbital period for the lowest orbit 
+# TODO: calculate orbital period for each shell
 
 # speed of light in km/s
 C = scipy.constants.speed_of_light / 1000.0
@@ -47,81 +48,52 @@ RESULTS_FILE = os.path.join(__root, "results.csv")
 
 # constellation shells to consider
 SHELLS = [
-    # Starlink Shell A
-    {
+    { # 1,584 satellites
         "name": "st1",
-        "pretty_name": "Starlink A",
+        "pretty_name": "Starlink 1",
         "planes": 72,
         "sats": 22,
         "altitude": 550,
         "inc": 53.0,
     },
-    # Starlink Shell B
-    {
+    { # 1,584 satellites
         "name": "st2",
-        "pretty_name": "Starlink B",
-        "planes": 5,
-        "sats": 75,
-        "altitude": 1275,
-        "inc": 81.0,
+        "pretty_name": "Starlink 2",
+        "planes": 72,
+        "sats": 22,
+        "altitude": 540,
+        "inc": 53.2,
     },
-    # Kuiper Shell A
-    {
-        "name": "ku1",
-        "pretty_name": "Kuiper A",
-        "planes": 34,
-        "sats": 34,
-        "altitude": 630,
-        "inc": 51.9,
+    { # 720 satellites
+        "name": "st3",
+        "pretty_name": "Starlink 3",
+        "planes": 36,
+        "sats": 20,
+        "altitude": 570,
+        "inc": 70.0,
     },
-    # Kuiper Shell B
-    {
-        "name": "ku2",
-        "pretty_name": "Kuiper B",
-        "planes": 28,
-        "sats": 28,
-        "altitude": 590,
-        "inc": 33.0,
+    { # 348 satellites
+        "name": "st4",
+        "pretty_name": "Starlink 4",
+        "planes": 6,
+        "sats": 58,
+        "altitude": 560,
+        "inc": 97.6,
     },
-]
-
-# SLOs to consider
-# type can be hops (discrete distances), mean (mean distances), or max (maximum distances)
-SLO = [
-    {
-        "type": "hops",
-        "d": 1,
+    { # 172 satellites
+        "name": "st5",
+        "pretty_name": "Starlink 5",
+        "planes": 4,
+        "sats": 43,
+        "altitude": 560,
+        "inc": 97.6,
     },
-    {
-        "type": "hops",
-        "d": 4,
-    },
-    {
-        "type": "mean",
-        # 10ms * c, convert ms to s and m to km
-        "d": 10 * 0.001 * C,
-    },
-    {
-        "type": "max",
-        # 10ms * c, convert ms to s and m to km
-        "d": 10 * 0.001 * C,
-    },
-        {
-        "type": "mean",
-        # 100ms * c, convert ms to s and m to km
-        "d": 100 * 0.001 * C,
-    },
-    {
-        "type": "max",
-        # 100ms * c, convert ms to s and m to km
-        "d": 100 * 0.001 * C,
-    }
 ]
 
 # generate the distances
 for s in SHELLS:
     if DEBUG:
-        print("Calculating distances for {}".format(s["name"]))
+        print("Calculating distances for {}".format(s["pretty_name"]))
 
     # intra-plane distance
     s["D_M"] = (EARTH_RADIUS + s["altitude"]) * np.sqrt(2 * (1 - np.cos((2*np.pi) / s["sats"])))

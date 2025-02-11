@@ -89,17 +89,17 @@ class Simulation():
             nodes_per_plane: int = 1,
             inclination: float = 70.0,
             semi_major_axis: int = 6472000,
-            earth_radius: int = 6371000,
+            earth_radius: int = 6371000, # mean radius
             model: str = "Kepler",
             animate: bool = True,
             report_status: bool = False):
 
-        # constillation structure information
+        # constellation structure information
         self.num_planes = planes
         self.num_nodes_per_plane = nodes_per_plane
         self.plane_inclination = inclination
         self.semi_major_axis = semi_major_axis
-        self.min_communications_altitude = 100000
+        self.min_communications_altitude = 80000 # approx. Thermosphere
 
         # control flags
         self.animate = animate
@@ -184,36 +184,33 @@ class Simulation():
         If False, this will be called in a loop until some desired runtime is reached
 
         """
-
-        time_1 = time.time()
+        if self.report_status:
+            time_1 = time.time()
 
         # grab initial time
         self.model.set_constellation_time(time=new_time)
 
-        time_2 = time.time()
+        if self.report_status:
+            time_2 = time.time()
 
         self.model.update_plus_grid_links(max_isl_range=self.max_isl_distance)
 
-        time_3 = time.time()
+        if self.report_status:
+            time_3 = time.time()
 
         links = self.model.get_array_of_links()
         if result_file is not None:
             for l in links:
                 if l["active"]:
-                    # let's only care about one node for now
-                    #if l["node_1"] == 0 or l["node_2"] == 0:
-                    # result_file.write(str(new_time))
-                    # result_file.write(",")
                     result_file.write(str(l["node_1"]))
                     result_file.write(",")
                     result_file.write(str(l["node_2"]))
                     result_file.write(",")
                     result_file.write(str(l["distance"]))
-                    # result_file.write(",")
-                    # result_file.write(str(self.plane_inclination))
                     result_file.write("\n")
 
-        time_4 = time.time()
+        if self.report_status:
+            time_4 = time.time()
 
         if self.animate:
             self.pipe_conn.send(["sat_positions", self.model.get_array_of_sat_positions()])
@@ -228,9 +225,8 @@ class Simulation():
         if self.animate:
             self.pipe_conn.send(["current_simulation_time", self.current_simulation_time])
 
-        time_5 = time.time()
-
         if self.report_status:
+            time_5 = time.time()
             print("set constellation time:", (time_2 - time_1))
             print("update links:", (time_3 - time_2))
             print("write to file:", (time_4 - time_3))

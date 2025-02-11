@@ -42,7 +42,7 @@ except ModuleNotFoundError:
 EARTH_ROTATION_AXIS = [0, 0, 1]
 
 # number of seconds per earth rotation (day)
-SECONDS_PER_DAY = 86400
+SECONDS_PER_DAY = 86400 # Simplification: 24 hours * 60 minutes * 60 seconds, in reality this is 86,164 seconds on average
 
 # according to wikipedia
 STD_GRAVITATIONAL_PARAMATER_EARTH = 3.986004418e14
@@ -133,9 +133,9 @@ class Constellation():
             inclination: float = 0,
             semi_major_axis: int = 6372000,
             ecc: float = 0.0,
-            min_communications_altitude: int = 100000,
+            min_communications_altitude: int = 80000, # approx. Thermosphere
             use_SGP4: bool = False,
-            earth_radius: int = 6371000,
+            earth_radius: int = 6371000, # mean radius
             arc_of_ascending_nodes: float = 360.0):
         """
         Parameters
@@ -199,7 +199,7 @@ class Constellation():
         if self.use_SGP4:
 
             if not sgp4.accelerated:
-                print("\033[93m⚠️  SGP4 C++ API not available on your system, falling back to slower Python implementation...\033[0m")
+                print("\033[93m  SGP4 C++ API not available on your system, falling back to slower Python implementation...\033[0m")
 
             self.init_satellite_array_sgp4(arc_of_ascending_nodes=arc_of_ascending_nodes)
         else:
@@ -606,59 +606,67 @@ class Constellation():
             self.number_of_planes,
             self.nodes_per_plane,
             crosslink_interpolation=crosslink_interpolation)
-        if temp is not None:
-            self.number_of_isl_links = temp[0]
+        if temp != 0:
+            self.number_of_isl_links = temp
             self.total_links = self.number_of_isl_links
 
     @staticmethod
     @numba.njit # type: ignore
-    def numba_init_plus_grid_links(
+    def numba_init_plus_grid_links( # TODO: why is this a separate function?
             link_array: np.ndarray,
             link_array_size: int,
             number_of_planes: int,
             nodes_per_plane: int,
-            crosslink_interpolation: int = 1) -> typing.Tuple[int]:
+            crosslink_interpolation: int = 1) -> int:
+        """initialize isls for a +grid network
 
+        Args:
+            link_array (np.ndarray): _description_
+            link_array_size (int): _description_
+            number_of_planes (int): _description_
+            nodes_per_plane (int): _description_
+            crosslink_interpolation (int, optional): _description_. Defaults to 1. TODO: what is this?
+
+        Returns:
+            int: number of isl links
+        """
         link_idx = 0
-
         # add the intra-plane links
         for plane in range(number_of_planes):
             for node in range(nodes_per_plane):
-                node_1 = node + (plane * nodes_per_plane)
-                if node == nodes_per_plane - 1:
-                    node_2 = plane * nodes_per_plane
-                else:
-                    node_2 = node + (plane * nodes_per_plane) + 1
-
-                if link_idx < link_array_size - 1:
-                    link_array[link_idx]['node_1'] = np.int16(node_1)
-                    link_array[link_idx]['node_2'] = np.int16(node_2)
-                    link_idx = link_idx + 1
-                else:
+                if link_idx >= link_array_size:
                     print('❌ ERROR! ran out of room in the link array for intra-plane links')
-                    return (0,)
+                    return 0
+                # for each satellite in the plane, we initialize one intra-plane isl for ease of implementation
+                
+                plane_factor = plane * nodes_per_plane
+                # this denotes the id of the satellite
+                node_1 = node + plane_factor
+                node_2 = ((node + 1) % nodes_per_plane) + plane_factor
 
-        # add the cross-plane links
+                link_array[link_idx]['node_1'] = np.int16(node_1)
+                link_array[link_idx]['node_2'] = np.int16(node_2)
+                link_idx = link_idx + 1
+
+        # add the inter-plane links
         for plane in range(number_of_planes):
-            if plane == number_of_planes - 1:
-                plane2 = 0
-            else:
-                plane2 = plane + 1
+            plane2 = (plane + 1) % number_of_planes
             for node in range(nodes_per_plane):
+                if link_idx >= link_array_size:
+                    print('❌ ERROR! ran out of room in the link array for intra-plane links')
+                    return 0
+
                 node_1 = node + (plane * nodes_per_plane)
                 node_2 = node + (plane2 * nodes_per_plane)
-                if link_idx < link_array_size - 1:
-                    if (node_1 + 1) % crosslink_interpolation == 0:
-                        link_array[link_idx]['node_1'] = np.int16(node_1)
-                        link_array[link_idx]['node_2'] = np.int16(node_2)
-                        link_idx = link_idx + 1
-                else:
-                    print('❌ ERROR! ran out of room in the link array for cross-plane links')
-                    return (0,)
+                # TODO: why plus one?
+                if (node_1 + 1) % crosslink_interpolation != 0:
+                    continue
 
-        number_of_isl_links = link_idx
+                link_array[link_idx]['node_1'] = np.int16(node_1)
+                link_array[link_idx]['node_2'] = np.int16(node_2)
+                link_idx = link_idx + 1
 
-        return (number_of_isl_links,)
+        return link_idx
 
     def update_plus_grid_links(self, max_isl_range: int) -> None:
         """
@@ -668,10 +676,10 @@ class Constellation():
         ----------
         initialize : bool
             Because PlusGrid ISL are static, they only need to be generated once,
-            If initialize=False, only update link distances, do not regererate
+            If initialize=False, only update link distances, do not regenerate
         crosslink_interpolation : int
             This value is used to make only 1 out of every crosslink_interpolation
-            satellites able to have crosslinks. For example, with a interpolation
+            satellites able to have crosslinks. For example, with an interpolation
             value of '2', only every other satellite will have crosslinks, the rest
             will have only intra-plane links
 
@@ -687,7 +695,7 @@ class Constellation():
 
     @staticmethod
     @numba.njit # type: ignore
-    def numba_update_plus_grid_links(
+    def numba_update_plus_grid_links( # TODO: again, why is this a separate function?
             total_sats: int,
             satellites_array: np.ndarray,
             link_array: np.ndarray,
