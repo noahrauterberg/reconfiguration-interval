@@ -16,7 +16,6 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-# gotta have numpy
 import numpy as np
 import numpy.typing as npt
 
@@ -25,67 +24,85 @@ from PyAstronomy import pyasl
 import sgp4.api as sgp4
 
 import math
-
 import tqdm
-import typing
+from typing import List
 
-# try to import numba funcs
 try:
     import numba
+
     USING_NUMBA = True
 except ModuleNotFoundError:
     USING_NUMBA = False
     print("you probably do not have numba installed...")
     print("reverting to non-numba mode")
 
-# earth"s z axis (eg a vector in the positive z direction)
+from .groundstation import GroundStation
+
+# earth's z axis (eg a vector in the positive z direction)
 EARTH_ROTATION_AXIS = [0, 0, 1]
 
 # number of seconds per earth rotation (day)
-SECONDS_PER_DAY = 86400 # Simplification: 24 hours * 60 minutes * 60 seconds, in reality this is 86,164 seconds on average
+# Simplification: 24 hours * 60 minutes * 60 seconds, in reality this is more like 86,164 seconds on average
+SECONDS_PER_DAY = 86_400
 
 # according to wikipedia
-STD_GRAVITATIONAL_PARAMATER_EARTH = 3.986004418e14
+STD_GRAVITATIONAL_PARAMETER_EARTH = 3.986004418e14
 
-# how big to initialize the ground point array...
-NUM_GROUND_POINTS = 0
-
-# The numpy data type used to store satellite data
-# note  use of int16 for names: max number of satellites = (2^15)-1
+# note  use of int16 for ids: max number of satellites = (2^15)-1
 # note use of int32 for position: max pos value = (2^31)-1 meters
-#    (this is 5.5 times the distance to the moon
-#     and should be fine for earth orbit simulation)
-# Note that fields can be accessed by their name: array[idx]["ID"]
-SATELLITE_DTYPE = np.dtype([
-    ("ID", np.int16),             # ID number, unique, = array index
-    ("plane_number", np.int16),   # which orbital plane is the satellite in?
-    ("offset_number", np.int16),  # What satellite withen the plane?
-    ("time_offset", np.float32),  # time offset for kepler ellipse solver
-    ("x", np.int32),              # x position in meters
-    ("y", np.int32),              # y position in meters
-    ("z", np.int32)])             # z position in meters
+#    (this is 5.5 times the distance to the moon and should be fine for earth orbit simulation)
+SATELLITE_DTYPE = np.dtype(
+    [
+        ("ID", np.int16),  # ID number, unique, = array index
+        ("plane_number", np.int16),  # which orbital plane is the satellite in?
+        ("offset_number", np.int16),  # What satellite withen the plane?
+        ("time_offset", np.float32),  # time offset for kepler ellipse solver
+        ("x", np.int32),  # x position in meters
+        ("y", np.int32),  # y position in meters
+        ("z", np.int32),  # z position in meters
+    ]
+)
 
+# link array size may have to be adjusted, each index is 8 bytes
+LINK_DTYPE = np.dtype(
+    [
+        ("node_1", np.int16),  # an endpoint of the link
+        ("node_2", np.int16),  # the other endpoint of the link
+        ("distance", np.int32),  # distance of the link in meters
+        ("active", bool),  # can this link be active?
+    ]
+)
 
-# The numpy data type used to store link data
-# link array size may have to be adjusted
-# each index is 8 bytes
-LINK_DTYPE = np.dtype([
-    ("node_1", np.int16),     # an endpoint of the link
-    ("node_2", np.int16),     # the other endpoint of the link
-    ("distance", np.int32), # distance of the link in meters
-    ("active", bool)])  # can this link be active?
+LINK_ARRAY_SIZE = 10_000_000  # 10 million indices = 80 megabyte array (huge)
 
-LINK_ARRAY_SIZE = 10000000  # 10 million indices = 80 megabyte array (huge)
+GROUNDPOINT_DTYPE = np.dtype(
+    [
+        ("ID", np.int16),  # ID number, unique, = array index
+        ("max_gsl_range", np.uint32),  # max gsl range of ground stations
+        # depends on minelevation
+        ("init_x", np.int32),  # initial x position in kilometers
+        ("init_y", np.int32),  # initial y position in kilometers
+        ("init_z", np.int32),  # initial z position in kilometers
+        ("x", np.int32),  # x position in meters
+        ("y", np.int32),  # y position in meters
+        ("z", np.int32),  # z position in meters
+    ]
+)
+
+GST_SAT_LINK_DTYPE = np.dtype(
+    [
+        ("gst", np.int16),  # ground station this link refers to
+        ("sat", np.int16),  # satellite endpoint of the link
+        ("distance_m", np.uint32),  # distance of the link in meterss
+    ]
+)
 
 ###############################################################################
-# const class
 
 
-class Constellation():
+class Constellation:
     """
     A class used to contain and manage a satellite constellation
-
-    ...
 
     Attributes
     ----------
@@ -95,8 +112,6 @@ class Constellation():
         the number of satellites per plane
     total_sats : int
         the total number of nodes(satellites) in constellation
-    ground_node_counter : int
-        always negative, countdown, used to keep track of ground node IDs
     inclination : float
         the inclination of all planes in constellation
     semi_major_axis : float
@@ -115,6 +130,8 @@ class Constellation():
         contains the time offsets for satellties withen a plane
     current_time : int
         keeps track of the current simulation time
+    ground_stations: List[GROUNDPOINT_DTYPE]
+        numpy array of groundpoint_dtype, contains ground station data
 
     Methods
     -------
@@ -127,16 +144,19 @@ class Constellation():
     """
 
     def __init__(
-            self,
-            planes: int = 1,
-            nodes_per_plane: int = 4,
-            inclination: float = 0,
-            semi_major_axis: int = 6372000,
-            ecc: float = 0.0,
-            min_communications_altitude: int = 80000, # approx. Thermosphere
-            use_SGP4: bool = False,
-            earth_radius: int = 6371000, # mean radius
-            arc_of_ascending_nodes: float = 360.0):
+        self,
+        planes: int = 1,
+        nodes_per_plane: int = 4,
+        inclination: float = 0,
+        semi_major_axis: int = 6_372_000,  # altitude of 1000 m
+        ecc: float = 0.0,
+        min_communications_altitude: int = 80000,  # approx. Thermosphere
+        earth_radius: int = 6_371_000,  # mean radius in meters
+        min_sat_elevation: int = 25,
+        use_SGP4: bool = False,
+        arc_of_ascending_nodes: float = 360.0,
+        groundstations: List[GroundStation] = np.empty(0),
+    ):
         """
         Parameters
         ----------
@@ -150,102 +170,93 @@ class Constellation():
             semi major axis of the orbits (radius, if orbits circular)
         ecc : float
             the eccentricity of the orbits; range = 0.0 - 1.0
-        minCommunicationsAltitude : int32
+        min_communications_altitude : int32
             The minimum altitude that inter satellite links must pass
             above the Earth"s surface.
-        minSatElevation : int
-            The minimum angle of elevation in degrees above the horizon a satellite
-            needs to have for a ground station to communicate with it.
-        linkingMethod : string
-            The current linking method used by the constellation
-            currently only used for generating GML files.
-        arcOfAscendingNodes : float
+        earth_radius: int
+            The mean radius of the Earth to be used
+        min_sat_elevation: int
+            The minimum elevation above the horzion that a satellite must have
+            in order to communicate with a groundstation
+        use_SGP4: bool
+            Whether to use sgp4 for calculations, basically speeds up the program
+        arc_of_ascending_nodes : float
             The angle of arc (in degrees) that the ascending nodes of all the
-            orbital planes is evenly spaced along. Ex, seting this to 180 results
+            orbital planes is evenly spaced along. Ex, setting this to 180 results
             in a Pi constellation like Iridium
+        groundstations : List[GroundStation]
+            The ground stations that connect to the constellation
         """
-
         self.number_of_planes = planes
         self.nodes_per_plane = nodes_per_plane
-        self.total_sats = planes*nodes_per_plane
-        self.ground_node_counter = 0
+        self.total_sats = planes * nodes_per_plane
         self.inclination = inclination
         self.semi_major_axis = semi_major_axis
-        self.period = self.calculate_orbit_period(semi_major_axis=self.semi_major_axis)
+        self.period = self.calculate_orbit_period(semi_major_axis=semi_major_axis)
         self.eccentricity = ecc
         self.earth_radius = earth_radius
         self.current_time = 0
         self.number_of_isl_links = 0
         self.number_of_gnd_links = 0
         self.total_links = 0
-        self.link_array_size = LINK_ARRAY_SIZE
         self.min_communications_altitude = min_communications_altitude
-        self.min_sat_elevation = 40
+        self.min_sat_elevation = min_sat_elevation
         self.use_SGP4 = use_SGP4
-        self.G = None
 
-        # this is not written to zero, because it has it"s own init
-        # function a a few lines down: initSatelliteArray()
-        self.satellites_array = np.empty(self.total_sats, dtype=SATELLITE_DTYPE)
+        self.link_array = np.zeros(LINK_ARRAY_SIZE, dtype=LINK_DTYPE)
 
-        # declare an empty link array
-        self.link_array = np.zeros(self.link_array_size, dtype=LINK_DTYPE)
+        # figure out the time offsets for nodes within a plane
+        self.time_offsets = [
+            (self.period / nodes_per_plane) * i for i in range(0, nodes_per_plane)
+        ]
 
-        # figure out the time offsets for nodes withen a plane
-        self.time_offsets = [(self.period/nodes_per_plane)*i for i in
-                             range(0, nodes_per_plane)]
+        self._init_ground_stations(groundstations)
 
         # initialize the satellite array
-        if self.use_SGP4:
-
+        if use_SGP4:
             if not sgp4.accelerated:
-                print("\033[93m  SGP4 C++ API not available on your system, falling back to slower Python implementation...\033[0m")
+                print(
+                    "\033[93m  SGP4 C++ API not available on your system, falling back to slower Python implementation...\033[0m"
+                )
 
-            self.init_satellite_array_sgp4(arc_of_ascending_nodes=arc_of_ascending_nodes)
+            self.init_satellite_array_sgp4(
+                arc_of_ascending_nodes=arc_of_ascending_nodes
+            )
         else:
             self.init_satellite_array(arc_of_ascending_nodes)
 
-    def init_satellite_array(self, arc_of_ascending_nodes) -> None:
+    def init_satellite_array(self, arc_of_ascending_nodes: float) -> None:
         """initializes the satellite array with positions at time zero
 
         Parameters
         ----------
-        sat_array :
-            the satellite array object, modified in place
+        arc_of_ascending_nodes: float
+            The angle of arc (in degrees) that the ascending nodes of all the
+            orbital planes is evenly spaced along. Ex, setting this to 180 results
+            in a Pi constellation like Iridium
 
         """
+        self.satellites_array = np.empty(self.total_sats, dtype=SATELLITE_DTYPE)
+
         # figure out how many degrees to space right ascending nodes of the planes
-        raan_offsets = [(arc_of_ascending_nodes / self.number_of_planes)*i for i in range(0, self.number_of_planes)]
+        raan_offsets = [
+            (arc_of_ascending_nodes / self.number_of_planes) * i
+            for i in range(0, self.number_of_planes)
+        ]
 
         # generate a list with a kepler ellipse solver object for each plane
         self.plane_solvers = []
         for raan in raan_offsets:
-            self.plane_solvers.append(pyasl.KeplerEllipse(
-                per=self.period,         # how long the orbit takes in seconds
-                a=self.semi_major_axis,  # if circular orbit, this is same as radius
-                e=self.eccentricity,     # generally close to 0 for leo constellations
-                Omega=raan,              # right ascention of the ascending node
-                w=0.0,                   # initial time offset / mean anamoly
-                i=self.inclination))     # orbit inclination
-        # we offset each plane by a small amount, so they do not "collide"
-        # this little algorithm comes up with a list of offset values
-        # phase_offset = ((self.period / self.nodes_per_plane) /
-        #                           2.0)
-        # temp = []
-        # toggle = False
-        # # this loop results puts thing in an array in this order:
-        # # [...8,6,4,2,0,1,3,5,7...]
-        # # so that the offsets in adjacent planes are similar
-        # # basically do not want the max and min offset in two adjcent planes
-        # for i in range(self.number_of_planes):
-        #     if toggle:
-        #         temp.append(phase_offset)
-        #     else:
-        #         temp.append(0.0)
-        #         # temp.append(phase_offset)
-        #     toggle = not toggle
-
-        # phase_offsets = temp
+            self.plane_solvers.append(
+                pyasl.KeplerEllipse(
+                    per=self.period,  # how long the orbit takes in seconds
+                    a=self.semi_major_axis,  # if circular orbit, this is same as radius
+                    e=self.eccentricity,  # generally close to 0 for leo constellations
+                    Omega=raan,  # right ascention of the ascending node
+                    w=0.0,  # initial time offset / mean anamoly
+                    i=self.inclination,
+                )
+            )  # orbit inclination
 
         # loop through all satellites
         for plane in range(0, self.number_of_planes):
@@ -255,7 +266,7 @@ class Constellation():
                 # offset = (self.time_offsets[node] + phase_offsets[plane])
                 offset = self.time_offsets[node]
                 # calculate the unique ID of the node (same as array index)
-                unique_id = (plane*self.nodes_per_plane) + node
+                unique_id = (plane * self.nodes_per_plane) + node
 
                 # calculate initial position
                 init_pos = self.plane_solvers[plane].xyzPos(offset)
@@ -274,10 +285,13 @@ class Constellation():
 
         Parameters
         ----------
-        sat_array :
-            the satellite array object, modified in place
+        arc_of_ascending_nodes: float
+            The angle of arc (in degrees) that the ascending nodes of all the
+            orbital planes is evenly spaced along. Ex, setting this to 180 results
+            in a Pi constellation like Iridium
 
         """
+        self.satellites_array = np.empty(self.total_sats, dtype=SATELLITE_DTYPE)
 
         MODEL = sgp4.WGS84
         MODE = "i"
@@ -286,69 +300,69 @@ class Constellation():
         ARGPO = 0.0
         START_JD, START_FR = 0.0, 0.0
 
-        # we offset each plane by a small amount, so they do not "collide"
-        # this little algorithm comes up with a list of offset values
-        # phase_offset = ((self.period / self.nodes_per_plane) /
-        #                           2.0)
-        # temp = []
-        # toggle = False
-        # # this loop results puts thing in an array in this order:
-        # # [...8,6,4,2,0,1,3,5,7...]
-        # # so that the offsets in adjacent planes are similar
-        # # basically do not want the max and min offset in two adjcent planes
-        # for i in range(self.number_of_planes):
-        #     if toggle:
-        #         temp.append(phase_offset)
-        #     else:
-        #         temp.append(0.0)
-        #         # temp.append(phase_offset)
-        #     toggle = not toggle
+        raan_offsets = [
+            (arc_of_ascending_nodes / self.number_of_planes) * i
+            for i in range(0, self.number_of_planes)
+        ]
 
-        # phase_offsets = temp
+        self.period = int(
+            2.0
+            * math.pi
+            * math.sqrt(
+                math.pow(self.semi_major_axis, 3) / STD_GRAVITATIONAL_PARAMETER_EARTH
+            )
+        )
 
-        raan_offsets = [(arc_of_ascending_nodes / self.number_of_planes)* i for i in range(0, self.number_of_planes)]
-
-        self.period = int(2.0 * math.pi * math.sqrt(math.pow(self.semi_major_axis, 3) / STD_GRAVITATIONAL_PARAMATER_EARTH))
-
-        self.time_offsets = [(self.period/self.nodes_per_plane)*i for i in range(0, self.nodes_per_plane)]
+        self.time_offsets = [
+            (self.period / self.nodes_per_plane) * i
+            for i in range(0, self.nodes_per_plane)
+        ]
 
         self.sgp4_solvers = [sgp4.Satrec()] * self.total_sats
 
         for plane in range(0, self.number_of_planes):
             for node in range(0, self.nodes_per_plane):
 
-                unique_id = (plane*self.nodes_per_plane) + node
+                unique_id = (plane * self.nodes_per_plane) + node
 
                 self.sgp4_solvers[unique_id] = sgp4.Satrec()
 
                 self.sgp4_solvers[unique_id].sgp4init(
-                    #whichconst=
-                    MODEL, # gravity model
-                    #opsmode=
-                    MODE, # 'a' = old AFSPC mode, 'i' = improved mode
-                    #satnum=
-                    unique_id, # satnum: Satellite number
-                    #epoch=
-                    START_JD, # epoch: days since 1949 December 31 00:00 UT
-                    #bstar=
-                    BSTAR, # bstar: drag coefficient (/earth radii)
-                    #ndot=
-                    NDOT, # ndot: ballistic coefficient (revs/day)
-                    #nddot=
-                    0.0, # nddot: second derivative of mean motion (revs/day^3)
-                    #ecco=
-                    self.eccentricity, # ecco: eccentricity
-                    #argpo=
-                    np.radians(ARGPO), # argpo: argument of perigee (radians) -> zero for circular orbits
-                    #inclo=
-                    np.radians(self.inclination), # inclo: inclination (radians)
-                    #mo=
+                    # whichconst=
+                    MODEL,  # gravity model
+                    # opsmode=
+                    MODE,  # 'a' = old AFSPC mode, 'i' = improved mode
+                    # satnum=
+                    unique_id,  # satnum: Satellite number
+                    # epoch=
+                    START_JD,  # epoch: days since 1949 December 31 00:00 UT
+                    # bstar=
+                    BSTAR,  # bstar: drag coefficient (/earth radii)
+                    # ndot=
+                    NDOT,  # ndot: ballistic coefficient (revs/day)
+                    # nddot=
+                    0.0,  # nddot: second derivative of mean motion (revs/day^3)
+                    # ecco=
+                    self.eccentricity,  # ecco: eccentricity
+                    # argpo=
+                    np.radians(
+                        ARGPO
+                    ),  # argpo: argument of perigee (radians) -> zero for circular orbits
+                    # inclo=
+                    np.radians(self.inclination),  # inclo: inclination (radians)
+                    # mo=
                     # np.radians((node + (phase_offsets[plane]*self.nodes_per_plane / self.period)) * (360.0 / self.nodes_per_plane) + self.time_offsets[node]/self.period), # mo: mean anomaly (radians) -> starts at 0 plus offset for the satellites
-                    np.radians((node) * (360.0 / self.nodes_per_plane) + self.time_offsets[node]/self.period), # mo: mean anomaly (radians) -> starts at 0 plus offset for the satellites
-                    #no_kozai=
-                    np.radians(360.0)/(self.period/60), # no_kozai: mean motion (radians/minute)
-                    #nodeo=
-                    np.radians(raan_offsets[plane]), # nodeo: right ascension of ascending node (radians)
+                    np.radians(
+                        (node) * (360.0 / self.nodes_per_plane)
+                        + self.time_offsets[node] / self.period
+                    ),  # mo: mean anomaly (radians) -> starts at 0 plus offset for the satellites
+                    # no_kozai=
+                    np.radians(360.0)
+                    / (self.period / 60),  # no_kozai: mean motion (radians/minute)
+                    # nodeo=
+                    np.radians(
+                        raan_offsets[plane]
+                    ),  # nodeo: right ascension of ascending node (radians)
                 )
 
                 # calculate initial position
@@ -362,7 +376,35 @@ class Constellation():
                 self.satellites_array[unique_id]["y"] = np.int32(r[1]) * 1000
                 self.satellites_array[unique_id]["z"] = np.int32(r[2]) * 1000
 
-    def get_array_of_node_positions(self) -> npt.NDArray[typing.Any]:
+    def _init_ground_stations(self, groundstations: List[GroundStation]) -> None:
+        """Initialize the ground stations of the constellation."""
+        self.groundstations = np.empty(len(groundstations), dtype=GROUNDPOINT_DTYPE)
+
+        for idx, g in enumerate(groundstations):
+            init_pos = [0.0, 0.0, 0.0]
+
+            latitude = math.radians(g.lat)
+            longitude = math.radians(g.lng)
+
+            init_pos[0] = self.earth_radius * math.cos(latitude) * math.cos(longitude)
+            init_pos[1] = self.earth_radius * math.cos(latitude) * math.sin(longitude)
+            init_pos[2] = self.earth_radius * math.sin(latitude)
+
+            new_gs = np.zeros(1, dtype=GROUNDPOINT_DTYPE)[0]
+            new_gs["ID"] = np.int16(idx)
+            new_gs["max_gsl_range"] = self.calculate_max_space_to_gnd_distance(
+                g.min_elevation
+            )
+            new_gs["init_x"] = np.int32(init_pos[0])
+            new_gs["init_y"] = np.int32(init_pos[1])
+            new_gs["init_z"] = np.int32(init_pos[2])
+            new_gs["x"] = np.int32(init_pos[0])
+            new_gs["y"] = np.int32(init_pos[1])
+            new_gs["z"] = np.int32(init_pos[2])
+
+            self.groundstations[idx] = new_gs
+
+    def get_array_of_node_positions(self) -> npt.NDArray[any]:
         """copies a sub array of only position data from
         satellite AND groundpoint arrays
 
@@ -372,9 +414,12 @@ class Constellation():
             a copied sub array of the satellite array, that only contains positions data
         """
 
-        return np.copy(self.satellites_array[["x", "y", "z"]])
+        return np.append(
+            self.groundstations[["x", "y", "z"]],
+            self.satellites_array[["x", "y", "z"]],
+        )
 
-    def get_array_of_sat_positions(self) -> npt.NDArray[typing.Any]:
+    def get_array_of_sat_positions(self) -> npt.NDArray[any]:
         """copies a sub array of only position data from
         satellite array
 
@@ -386,7 +431,10 @@ class Constellation():
 
         return np.copy(self.satellites_array[["x", "y", "z"]])
 
-    def get_array_of_links(self) -> npt.NDArray[typing.Any]:
+    def get_gs_positions(self) -> npt.NDArray[any]:
+        return np.copy(self.groundstations[["x", "y", "z"]])
+
+    def get_array_of_links(self) -> npt.NDArray[any]:
         """copies a sub array of link data
 
         Returns
@@ -415,6 +463,7 @@ class Constellation():
         # cast time to an int
         self.current_time = int(time)
 
+        self.update_gst_pos()
         if self.use_SGP4:
             self.update_sat_pos_sgp4()
         else:
@@ -424,25 +473,38 @@ class Constellation():
 
     def update_sat_pos(self) -> None:
         for sat_id in range(self.satellites_array.size):
-            pos = self.plane_solvers[self.satellites_array[sat_id]["plane_number"]].xyzPos(self.current_time + self.satellites_array[sat_id]["time_offset"])
+            pos = self.plane_solvers[
+                self.satellites_array[sat_id]["plane_number"]
+            ].xyzPos(self.current_time + self.satellites_array[sat_id]["time_offset"])
 
             self.satellites_array[sat_id]["x"] = np.int32(pos[0])
             self.satellites_array[sat_id]["y"] = np.int32(pos[1])
             self.satellites_array[sat_id]["z"] = np.int32(pos[2])
 
     def update_sat_pos_sgp4(self) -> None:
-        fr = 0.0 + (self.current_time/SECONDS_PER_DAY)
+        fr = 0.0 + (self.current_time / SECONDS_PER_DAY)
 
         for sat_id in range(self.satellites_array.size):
             e, r, d = self.sgp4_solvers[sat_id].sgp4(0.0, fr)
 
-            self.satellites_array[sat_id]['x'] = np.int32(r[0]) * 1000
-            self.satellites_array[sat_id]['y'] = np.int32(r[1]) * 1000
-            self.satellites_array[sat_id]['z'] = np.int32(r[2]) * 1000
+            self.satellites_array[sat_id]["x"] = np.int32(r[0]) * 1000
+            self.satellites_array[sat_id]["y"] = np.int32(r[1]) * 1000
+            self.satellites_array[sat_id]["z"] = np.int32(r[2]) * 1000
 
+    def update_gst_pos(self) -> None:
+        for gst in self.groundstations:
+            rotation_matrix = self._get_rotation_matrix(
+                self.current_time / SECONDS_PER_DAY
+            )
+            new_pos = np.dot(
+                rotation_matrix, [gst["init_x"], gst["init_y"], gst["init_z"]]
+            )
+            gst["x"] = new_pos[0]
+            gst["y"] = new_pos[1]
+            gst["z"] = new_pos[2]
 
     def calculate_orbit_period(self, semi_major_axis: float = 0.0) -> int:
-        """ calculates the period of a orbit for Earth
+        """calculates the period of a orbit for Earth
 
         Parameters
         ----------
@@ -455,34 +517,37 @@ class Constellation():
             the period of the orbit in seconds (rounded to whole seconds)
         """
 
-        tmp = math.pow(semi_major_axis, 3) / STD_GRAVITATIONAL_PARAMATER_EARTH
-        return int(2.0 * math.pi * math.sqrt(tmp))
+        tmp = math.pow(semi_major_axis, 3) / STD_GRAVITATIONAL_PARAMETER_EARTH
+        period = int(2.0 * math.pi * math.sqrt(tmp))
+        print("Orbital period: {} seconds".format(period))
+        return period
 
-    def get_rotation_matrix(self, axis: np.ndarray, degrees: float) -> np.ndarray:
+    def _get_rotation_matrix(self, degrees: float) -> np.ndarray:
         """
         Return the rotation matrix associated with counterclockwise rotation about
-        the given axis by theta radians.
+        the constant rotation axis by theta radians.
 
         Parameters
         ----------
-        axis : list[x, y, z]
-            a vector defining the rotaion axis
         degrees : float
             The number of degrees to rotate
 
         """
 
         theta = math.radians(degrees)
-        axis = np.asarray(axis)
+        axis = np.asarray(EARTH_ROTATION_AXIS)
         axis = axis / math.sqrt(np.dot(axis, axis))
         a = math.cos(theta / 2.0)
         b, c, d = -axis * math.sin(theta / 2.0)
         aa, bb, cc, dd = a * a, b * b, c * c, d * d
         bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
-        return np.array([
-            [aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
-            [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
-            [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
+        return np.array(
+            [
+                [aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
+                [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
+                [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc],
+            ]
+        )
 
     def calculate_max_ISL_distance(self, min_communication_altitude: int) -> int:
         """
@@ -529,10 +594,6 @@ class Constellation():
             max coms distance in meters
 
         """
-
-        # TODO
-        # make a drawing explaining this
-
         full_line = False
         tangent_tol = 1e-9
 
@@ -553,28 +614,40 @@ class Constellation():
 
         (x1, y1), (x2, y2) = (p1x - cx, p1y - cy), (p2x - cx, p2y - cy)
         dx, dy = (x2 - x1), (y2 - y1)
-        dr = (dx ** 2 + dy ** 2)**.5
+        dr = (dx**2 + dy**2) ** 0.5
         big_d = x1 * y2 - x2 * y1
-        discriminant = circle_radius ** 2 * dr ** 2 - big_d ** 2
+        discriminant = circle_radius**2 * dr**2 - big_d**2
 
         if discriminant < 0:  # No intersection between circle and line
             print("ERROR! problem with calculateMaxSpaceToGndDistance, no intersection")
             return 0
         else:  # There may be 0, 1, or 2 intersections with the segment
             intersections = [
-                (cx+(big_d*dy+sign*(-1 if dy < 0 else 1)*dx*discriminant**.5)/dr**2,
-                 cy + (-big_d * dx + sign * abs(dy) * discriminant**.5) / dr ** 2)
-                for sign in ((1, -1) if dy < 0 else (-1, 1))]
+                (
+                    cx
+                    + (
+                        big_d * dy
+                        + sign * (-1 if dy < 0 else 1) * dx * discriminant**0.5
+                    )
+                    / dr**2,
+                    cy + (-big_d * dx + sign * abs(dy) * discriminant**0.5) / dr**2,
+                )
+                for sign in ((1, -1) if dy < 0 else (-1, 1))
+            ]
 
             # This makes sure the order along the segment is correct
             if not full_line:
                 # Filter out intersections that do not fall within the segment
-                fraction_along_segment = [(xi - p1x) / dx if abs(dx) > abs(dy)
-                                          else (yi - p1y) / dy for xi, yi in intersections]
+                fraction_along_segment = [
+                    (xi - p1x) / dx if abs(dx) > abs(dy) else (yi - p1y) / dy
+                    for xi, yi in intersections
+                ]
 
-                intersections = [pt for pt, frac in
-                                 zip(intersections, fraction_along_segment)
-                                 if 0 <= frac <= 1]
+                intersections = [
+                    pt
+                    for pt, frac in zip(intersections, fraction_along_segment)
+                    if 0 <= frac <= 1
+                ]
 
             if len(intersections) == 2 and abs(discriminant) <= tangent_tol:
                 # If line is tangent to circle, return just one point
@@ -589,10 +662,7 @@ class Constellation():
                 continue
             else:
                 # calculate dist to this intersection
-                d = math.sqrt(
-                    math.pow(i[0]-p1x, 2) +
-                    math.pow(i[1]-p1y, 2)
-                )
+                d = math.sqrt(math.pow(i[0] - p1x, 2) + math.pow(i[1] - p1y, 2))
                 return int(d)
 
         return 0
@@ -602,22 +672,24 @@ class Constellation():
 
         temp = self.numba_init_plus_grid_links(
             self.link_array,
-            self.link_array_size,
             self.number_of_planes,
+            LINK_ARRAY_SIZE,
             self.nodes_per_plane,
-            crosslink_interpolation=crosslink_interpolation)
+            crosslink_interpolation=crosslink_interpolation,
+        )
         if temp != 0:
             self.number_of_isl_links = temp
             self.total_links = self.number_of_isl_links
 
     @staticmethod
-    @numba.njit # type: ignore
-    def numba_init_plus_grid_links( # TODO: why is this a separate function?
-            link_array: np.ndarray,
-            link_array_size: int,
-            number_of_planes: int,
-            nodes_per_plane: int,
-            crosslink_interpolation: int = 1) -> int:
+    @numba.njit  # type: ignore
+    def numba_init_plus_grid_links(
+        link_array: np.ndarray,
+        number_of_planes: int,
+        link_array_size: int,
+        nodes_per_plane: int,
+        crosslink_interpolation: int = 1,
+    ) -> int:
         """initialize isls for a +grid network
 
         Args:
@@ -634,18 +706,20 @@ class Constellation():
         # add the intra-plane links
         for plane in range(number_of_planes):
             for node in range(nodes_per_plane):
-                if link_idx >= link_array_size:
-                    print('❌ ERROR! ran out of room in the link array for intra-plane links')
+                if link_idx >= link_array_size - 1:
+                    print(
+                        "❌ ERROR! ran out of room in the link array for intra-plane links"
+                    )
                     return 0
                 # for each satellite in the plane, we initialize one intra-plane isl for ease of implementation
-                
+
                 plane_factor = plane * nodes_per_plane
                 # this denotes the id of the satellite
                 node_1 = node + plane_factor
                 node_2 = ((node + 1) % nodes_per_plane) + plane_factor
 
-                link_array[link_idx]['node_1'] = np.int16(node_1)
-                link_array[link_idx]['node_2'] = np.int16(node_2)
+                link_array[link_idx]["node_1"] = np.int16(node_1)
+                link_array[link_idx]["node_2"] = np.int16(node_2)
                 link_idx = link_idx + 1
 
         # add the inter-plane links
@@ -653,7 +727,9 @@ class Constellation():
             plane2 = (plane + 1) % number_of_planes
             for node in range(nodes_per_plane):
                 if link_idx >= link_array_size:
-                    print('❌ ERROR! ran out of room in the link array for intra-plane links')
+                    print(
+                        "❌ ERROR! ran out of room in the link array for inter-plane links"
+                    )
                     return 0
 
                 node_1 = node + (plane * nodes_per_plane)
@@ -662,8 +738,8 @@ class Constellation():
                 if (node_1 + 1) % crosslink_interpolation != 0:
                     continue
 
-                link_array[link_idx]['node_1'] = np.int16(node_1)
-                link_array[link_idx]['node_2'] = np.int16(node_2)
+                link_array[link_idx]["node_1"] = np.int16(node_1)
+                link_array[link_idx]["node_2"] = np.int16(node_2)
                 link_idx = link_idx + 1
 
         return link_idx
@@ -673,9 +749,6 @@ class Constellation():
         connect satellites in a +grid network
 
         Parameters
-        ----------
-        initialize : bool
-            Because PlusGrid ISL are static, they only need to be generated once,
             If initialize=False, only update link distances, do not regenerate
         crosslink_interpolation : int
             This value is used to make only 1 out of every crosslink_interpolation
@@ -689,27 +762,38 @@ class Constellation():
             total_sats=self.total_sats,
             satellites_array=self.satellites_array,
             link_array=self.link_array,
-            link_array_size=self.link_array_size,
+            link_array_size=LINK_ARRAY_SIZE,
             number_of_isl_links=self.number_of_isl_links,
-            max_isl_range=max_isl_range)
+            max_isl_range=max_isl_range,
+        )
 
     @staticmethod
-    @numba.njit # type: ignore
-    def numba_update_plus_grid_links( # TODO: again, why is this a separate function?
-            total_sats: int,
-            satellites_array: np.ndarray,
-            link_array: np.ndarray,
-            link_array_size: int,
-            number_of_isl_links: int,
-            max_isl_range: int = (2**31)-1) -> None:
+    @numba.njit  # type: ignore
+    def numba_update_plus_grid_links(
+        total_sats: int,
+        satellites_array: np.ndarray,
+        link_array: np.ndarray,
+        link_array_size: int,
+        number_of_isl_links: int,
+        max_isl_range: int = (2**31) - 1,
+    ) -> None:
 
         for isl_idx in range(number_of_isl_links):
-            sat_1 = link_array[isl_idx]['node_1']
-            sat_2 = link_array[isl_idx]['node_2']
-            d = int(math.sqrt(
-                math.pow(satellites_array[sat_1]['x'] - satellites_array[sat_2]['x'], 2) +
-                math.pow(satellites_array[sat_1]['y'] - satellites_array[sat_2]['y'], 2) +
-                math.pow(satellites_array[sat_1]['z'] - satellites_array[sat_2]['z'], 2)))
+            sat_1 = link_array[isl_idx]["node_1"]
+            sat_2 = link_array[isl_idx]["node_2"]
+            d = int(
+                math.sqrt(
+                    math.pow(
+                        satellites_array[sat_1]["x"] - satellites_array[sat_2]["x"], 2
+                    )
+                    + math.pow(
+                        satellites_array[sat_1]["y"] - satellites_array[sat_2]["y"], 2
+                    )
+                    + math.pow(
+                        satellites_array[sat_1]["z"] - satellites_array[sat_2]["z"], 2
+                    )
+                )
+            )
 
-            link_array[isl_idx]['distance'] = d
-            link_array[isl_idx]['active'] = d <= max_isl_range
+            link_array[isl_idx]["distance"] = d
+            link_array[isl_idx]["active"] = d <= max_isl_range

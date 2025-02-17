@@ -7,38 +7,95 @@ import tqdm
 import os
 import sys
 import concurrent.futures
+import numpy as np
 
 import config
 from simulation.simulation import Simulation
+from simulation.groundstation import GroundStation
 
 sys.path.append(os.path.abspath(os.getcwd()))
 
-def run_simulation(steps: int, interval: float, planes: int, nodes: int, inc: float, altitude: int, name: str, results_folder: str):
-    results_dir = os.path.join(results_folder, name)
-    os.makedirs(results_dir, exist_ok=True)
+
+def run_simulation(
+    steps: int,
+    interval: float,
+    planes: int,
+    nodes: int,
+    inc: float,
+    altitude: int,
+    name: str,
+    groundstations: GroundStation,
+    sat_links_dir: str,
+    sat_positions_dir: str,
+    gs_positions_dir: str,
+):
+    sat_links_dir = os.path.join(sat_links_dir, name)
+    sat_positions_dir = os.path.join(sat_positions_dir, name)
+    gs_positions_dir = os.path.join(gs_positions_dir, name)
+
+    os.makedirs(sat_links_dir, exist_ok=True)
+    os.makedirs(sat_positions_dir, exist_ok=True)
+    os.makedirs(gs_positions_dir, exist_ok=True)
 
     # setup simulation
-    semi_major = int(altitude + config.EARTH_RADIUS)*1000 # semi-major axis in meters. Since we are only concerned with circular orbits, this is just the radius of the orbit = altitude + earth_radius
-    s = Simulation(planes=planes, nodes_per_plane=nodes, inclination=inc, semi_major_axis=semi_major, model=config.MODEL, animate=config.ANIMATE, report_status=config.DEBUG)
+    semi_major = (
+        int(altitude + config.EARTH_RADIUS) * 1000
+    )  # semi-major axis in meters. Since we are only concerned with circular orbits, this is just the radius of the orbit = altitude + earth_radius
+    s = Simulation(
+        planes=planes,
+        nodes_per_plane=nodes,
+        inclination=inc,
+        semi_major_axis=semi_major,
+        model=config.MODEL,
+        animate=config.ANIMATE,
+        report_status=config.DEBUG,
+        groundstations=groundstations,
+    )
 
     # for each timestep, run simulation
-    total_steps = int(steps/interval)
+    total_steps = int(steps / interval)
     for step in tqdm.trange(total_steps, desc="simulating {}".format(name)):
-    # for step in range(total_steps):
-        next_time = step*interval
+        # for step in range(total_steps):
+        next_time = step * interval
 
-        with open(os.path.join(results_dir, "{}.csv".format(next_time)), "w") as f:
-            f.write("a,b,distance\n")
+        with open(
+            os.path.join(sat_links_dir, "{}.csv".format(next_time)), "w"
+        ) as sat_links, open(
+            os.path.join(sat_positions_dir, "{}.csv".format(next_time)), "w"
+        ) as sat_pos, open(
+            os.path.join(gs_positions_dir, "{}.csv".format(next_time)), "w"
+        ) as gs_pos:
+            sat_links.write("a,b,distance\n")
+            sat_pos.write("id,x,y,z\n")
+            gs_pos.write("name,x,y,z\n")
 
-            s.update_model(next_time, result_file=f)
+            s.update_model(
+                next_time, link_file=sat_links, positions_file=sat_pos, gs_file=gs_pos
+            )
 
     if s.animation is not None:
         s.animation.terminate()
 
     s.terminate()
 
+
 if __name__ == "__main__":
+
+    ground_stations = [GroundStation("Testing 1", 0.0, 0.0, 25.0)]
+
     with concurrent.futures.ProcessPoolExecutor() as executor:
         for s in config.SHELLS:
-            run_simulation(config.STEPS, config.INTERVAL, int(s["planes"]), int(s["sats"]), float(s["inc"]), int(s["altitude"]), s["name"], config.DISTANCES_DIR)
+            run_simulation(
+                config.STEPS,
+                config.INTERVAL,
+                int(s["planes"]),
+                int(s["sats"]),
+                float(s["inc"]),
+                int(s["altitude"]),
+                s["name"],
+                ground_stations,
+                config.DISTANCES_DIR,
+                config.SAT_POSITIONS_DIR,
+                config.GS_POSITIONS_DIR,
+            )
             # executor.submit(run_simulation, config.STEPS, config.INTERVAL, int(s["planes"]), int(s["sats"]), float(s["inc"]), int(s["altitude"]), s["name"], config.DISTANCES_DIR)

@@ -12,8 +12,8 @@ results.csv.BAK
 # results folders
 distances-results/
 graphs/
-placement-distances/
-placements/
+sat-positions/
+gs-positions/
 
 # go binaries
 caching/caching

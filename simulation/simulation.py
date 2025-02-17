@@ -21,6 +21,7 @@ import multiprocessing as mp
 
 # custom classes
 from .constellation import Constellation
+from .groundstation import GroundStation
 
 # use to measure program performance (sim framerate)
 import time
@@ -30,13 +31,13 @@ import typing
 # try to import numba funcs
 try:
     import numba
-    #import numba_funcs as nf
+
+    # import numba_funcs as nf
     USING_NUMBA = True
 except ModuleNotFoundError:
     USING_NUMBA = False
     print("you probably do not have numba installed...")
     print("reverting to non-numba mode")
-
 
 ###############################################################################
 #                               GLOBAL VARS                                   #
@@ -81,25 +82,27 @@ SECONDS_PER_DAY = 86400  # number of seconds per earth rotation (day)
 ###############################################################################
 
 
-class Simulation():
+class Simulation:
 
     def __init__(
-            self,
-            planes: int = 1,
-            nodes_per_plane: int = 1,
-            inclination: float = 70.0,
-            semi_major_axis: int = 6472000,
-            earth_radius: int = 6371000, # mean radius
-            model: str = "Kepler",
-            animate: bool = True,
-            report_status: bool = False):
+        self,
+        planes: int = 1,
+        nodes_per_plane: int = 1,
+        inclination: float = 70.0,
+        semi_major_axis: int = 6472000,
+        earth_radius: int = 6371000,  # mean radius
+        model: str = "Kepler",
+        animate: bool = True,
+        groundstations: typing.List[GroundStation] = [],
+        report_status: bool = False,
+    ):
 
         # constellation structure information
         self.num_planes = planes
         self.num_nodes_per_plane = nodes_per_plane
         self.plane_inclination = inclination
         self.semi_major_axis = semi_major_axis
-        self.min_communications_altitude = 80000 # approx. Thermosphere
+        self.min_communications_altitude = 80000  # approx. Thermosphere
 
         # control flags
         self.animate = animate
@@ -118,7 +121,6 @@ class Simulation():
         else:
             raise ValueError("invalid model: " + model)
 
-        # init the Constellation model
         self.model = Constellation(
             planes=self.num_planes,
             nodes_per_plane=self.num_nodes_per_plane,
@@ -126,15 +128,11 @@ class Simulation():
             semi_major_axis=self.semi_major_axis,
             min_communications_altitude=self.min_communications_altitude,
             use_SGP4=use_SGP4,
-            earth_radius=earth_radius)
-
-        # init the network design
+            earth_radius=earth_radius,
+            groundstations=groundstations,
+        )
         self.initialize_network_design()
 
-        # so, after much effort it appears that I cannot control an
-        # interactive vtk window externally. Therefore when running
-        # with an animation, the animation class will have to drive
-        # the simulation using an internal timer...
         if self.animate:
 
             from .animation import Animation
@@ -144,6 +142,8 @@ class Simulation():
             kw = {
                 "total_sats": self.model.total_sats,
                 "sat_positions": self.model.get_array_of_sat_positions(),
+                "total_gsts": 0,
+                "gst_positions": [],  # TODO
                 "current_simulation_time": self.current_simulation_time,
                 "earth_radius": earth_radius,
                 "pipe_conn": child_conn,
@@ -165,7 +165,8 @@ class Simulation():
             print("initalizing network design... ")
 
         self.max_isl_distance = self.model.calculate_max_ISL_distance(
-            self.min_communications_altitude)
+            self.min_communications_altitude
+        )
 
         if self.report_status:
             print("maxIsl: ", self.max_isl_distance)
@@ -175,7 +176,13 @@ class Simulation():
         if self.report_status:
             print("done initalizing")
 
-    def update_model(self, new_time: float, result_file: typing.TextIO) -> None:
+    def update_model(
+        self,
+        new_time: float,
+        link_file: typing.TextIO,
+        positions_file: typing.TextIO,
+        gs_file: typing.TextIO,
+    ) -> None:
         """
         Update the model with a new time & recalculate links
 
@@ -198,24 +205,32 @@ class Simulation():
         if self.report_status:
             time_3 = time.time()
 
-        links = self.model.get_array_of_links()
-        if result_file is not None:
+        if link_file is not None:
+            links = self.model.get_array_of_links()
             for l in links:
                 if l["active"]:
-                    result_file.write(str(l["node_1"]))
-                    result_file.write(",")
-                    result_file.write(str(l["node_2"]))
-                    result_file.write(",")
-                    result_file.write(str(l["distance"]))
-                    result_file.write("\n")
+                    link_file.write(
+                        "{},{},{}\n".format(l["node_1"], l["node_2"], l["distance"])
+                    )
+        if positions_file is not None:
+            sat_positions = self.model.get_array_of_sat_positions()
+            for id, pos in enumerate(sat_positions):
+                positions_file.write("{},{},{},{}\n".format(id, pos[0], pos[1], pos[2]))
+
+        if gs_file is not None:
+            gs_positions = self.model.get_gs_positions()
+            for id, pos in enumerate(gs_positions):
+                gs_file.write("{},{},{},{}\n".format(id, pos[0], pos[1], pos[2]))
 
         if self.report_status:
             time_4 = time.time()
 
         if self.animate:
-            self.pipe_conn.send(["sat_positions", self.model.get_array_of_sat_positions()])
+            self.pipe_conn.send(
+                ["sat_positions", self.model.get_array_of_sat_positions()]
+            )
             self.pipe_conn.send(["links", links])
-            self.pipe_conn.send(["points",self.model.get_array_of_node_positions()])
+            self.pipe_conn.send(["points", self.model.get_array_of_node_positions()])
             self.pipe_conn.send(["total_sats", self.model.total_sats])
             self.pipe_conn.send(["pause", self.pause])
             self.pipe_conn.send(["current_simulation_time", new_time])
@@ -223,7 +238,9 @@ class Simulation():
         self.current_simulation_time = new_time
 
         if self.animate:
-            self.pipe_conn.send(["current_simulation_time", self.current_simulation_time])
+            self.pipe_conn.send(
+                ["current_simulation_time", self.current_simulation_time]
+            )
 
         if self.report_status:
             time_5 = time.time()
