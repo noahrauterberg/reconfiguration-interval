@@ -29,23 +29,19 @@ INTERVAL = 1
 
 # total length of the simulation in seconds
 STEPS = 700  # a bit over one orbital period for the lowest orbit
-# TODO: calculate orbital period for each shell
+# STEPS = 8640
 
 # speed of light in km/s
 C = scipy.constants.speed_of_light / 1_000.0
 
 # output folders
 __root = os.path.abspath(os.path.dirname(__file__)) if __file__ else "."
-PLACEMENTS_DIR = os.path.join(__root, "placements")
-os.makedirs(PLACEMENTS_DIR, exist_ok=True)
 DISTANCES_DIR = os.path.join(__root, "distances-results")
 os.makedirs(DISTANCES_DIR, exist_ok=True)
 SAT_POSITIONS_DIR = os.path.join(__root, "sat-positions")
 os.makedirs(SAT_POSITIONS_DIR, exist_ok=True)
 GS_POSITIONS_DIR = os.path.join(__root, "gs-positions")
 os.makedirs(GS_POSITIONS_DIR, exist_ok=True)
-PLACEMENT_DISTANCES_DIR = os.path.join(__root, "placement-distances")
-os.makedirs(PLACEMENT_DISTANCES_DIR, exist_ok=True)
 GRAPHS_DIR = os.path.join(__root, "graphs")
 os.makedirs(GRAPHS_DIR, exist_ok=True)
 RESULTS_FILE = os.path.join(__root, "results.csv")

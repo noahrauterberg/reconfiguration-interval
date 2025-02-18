@@ -38,12 +38,9 @@ except ModuleNotFoundError:
 
 from .groundstation import GroundStation
 
-# earth's z axis (eg a vector in the positive z direction)
-EARTH_ROTATION_AXIS = [0, 0, 1]
-
 # number of seconds per earth rotation (day)
 # Simplification: 24 hours * 60 minutes * 60 seconds, in reality this is more like 86,164 seconds on average
-SECONDS_PER_DAY = 86_400
+SECONDS_PER_DAY = 8_640
 
 # according to wikipedia
 STD_GRAVITATIONAL_PARAMETER_EARTH = 3.986004418e14
@@ -80,9 +77,9 @@ GROUNDPOINT_DTYPE = np.dtype(
         ("ID", np.int16),  # ID number, unique, = array index
         ("max_gsl_range", np.uint32),  # max gsl range of ground stations
         # depends on minelevation
-        ("init_x", np.int32),  # initial x position in kilometers
-        ("init_y", np.int32),  # initial y position in kilometers
-        ("init_z", np.int32),  # initial z position in kilometers
+        ("init_x", np.int32),  # initial x position in meters
+        ("init_y", np.int32),  # initial y position in meters
+        ("init_z", np.int32),  # initial z position in meters
         ("x", np.int32),  # x position in meters
         ("y", np.int32),  # y position in meters
         ("z", np.int32),  # z position in meters
@@ -492,16 +489,15 @@ class Constellation:
             self.satellites_array[sat_id]["z"] = np.int32(r[2]) * 1000
 
     def update_gst_pos(self) -> None:
-        for gst in self.groundstations:
-            rotation_matrix = self._get_rotation_matrix(
-                self.current_time / SECONDS_PER_DAY
-            )
+        deg = 360.0 * (self.current_time / SECONDS_PER_DAY)
+        rotation_matrix = self._get_rotation_matrix(deg)
+        for gs in self.groundstations:
             new_pos = np.dot(
-                rotation_matrix, [gst["init_x"], gst["init_y"], gst["init_z"]]
+                rotation_matrix, [gs["init_x"], gs["init_y"], gs["init_z"]]
             )
-            gst["x"] = new_pos[0]
-            gst["y"] = new_pos[1]
-            gst["z"] = new_pos[2]
+            gs["x"] = new_pos[0]
+            gs["y"] = new_pos[1]
+            gs["z"] = new_pos[2]
 
     def calculate_orbit_period(self, semi_major_axis: float = 0.0) -> int:
         """calculates the period of a orbit for Earth
@@ -525,7 +521,7 @@ class Constellation:
     def _get_rotation_matrix(self, degrees: float) -> np.ndarray:
         """
         Return the rotation matrix associated with counterclockwise rotation about
-        the constant rotation axis by theta radians.
+        the z-axis by given number of degrees.
 
         Parameters
         ----------
@@ -533,19 +529,13 @@ class Constellation:
             The number of degrees to rotate
 
         """
-
         theta = math.radians(degrees)
-        axis = np.asarray(EARTH_ROTATION_AXIS)
-        axis = axis / math.sqrt(np.dot(axis, axis))
-        a = math.cos(theta / 2.0)
-        b, c, d = -axis * math.sin(theta / 2.0)
-        aa, bb, cc, dd = a * a, b * b, c * c, d * d
-        bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
+        # hardcode the matrix (for z-axis) to avoid unnecessary complexity and computations
         return np.array(
             [
-                [aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
-                [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
-                [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc],
+                [math.cos(theta), -math.sin(theta), 0],
+                [math.sin(theta), math.cos(theta), 0],
+                [0, 0, 1],
             ]
         )
 
@@ -758,7 +748,7 @@ class Constellation:
 
         """
 
-        temp = self.numba_update_plus_grid_links(
+        self.numba_update_plus_grid_links(
             total_sats=self.total_sats,
             satellites_array=self.satellites_array,
             link_array=self.link_array,

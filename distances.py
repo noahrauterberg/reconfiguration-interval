@@ -53,11 +53,8 @@ def run_simulation(
     )
 
     # for each timestep, run simulation
-    total_steps = int(steps / interval)
-    for step in tqdm.trange(total_steps, desc="simulating {}".format(name)):
-        # for step in range(total_steps):
-        next_time = step * interval
-
+    # for step in tqdm.trange(total_steps, desc="simulating {}".format(name)):
+    for next_time in range(0, steps, interval):
         with open(
             os.path.join(sat_links_dir, "{}.csv".format(next_time)), "w"
         ) as sat_links, open(
@@ -70,7 +67,10 @@ def run_simulation(
             gs_pos.write("name,x,y,z\n")
 
             s.update_model(
-                next_time, link_file=sat_links, positions_file=sat_pos, gs_file=gs_pos
+                new_time=next_time,
+                link_file=sat_links,
+                positions_file=sat_pos,
+                gs_file=gs_pos,
             )
 
     if s.animation is not None:

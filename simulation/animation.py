@@ -67,25 +67,33 @@ H3_LINK_COLOR = (1.0, 0.3, 0.3)
 H3_LINK_OPACITY = 1.0
 H3_LINE_WIDTH = 10  # how wide to draw line in pixels
 
+GS_COLOR = (0.0, 1.0, 0.0)  # green, color of groundstations
+GS_OPACITY = 10.0
+GS_POINT_SIZE = 8  # how big ground stations are in (probably) screen pixels
+
 EARTH_SPHERE_POINTS = 5000  # higher = smoother earth model, slower to generate
 
 SAT_POINT_SIZE = 9  # how big satellites are in (probably) screen pixels
-GND_POINT_SIZE = 8  # how big ground points are in (probably) screen pixels
 
 SECONDS_PER_DAY = 86400  # number of seconds per earth rotation (day)
 
-class Animation():
+
+class Animation:
 
     def __init__(
         self,
         total_sats: int,
         sat_positions: np.ndarray,
+        total_gsts: int,
+        gst_positions: np.ndarray,
         current_simulation_time: int,
         earth_radius: int,
-        pipe_conn: MultiprocessingConnection
+        pipe_conn: MultiprocessingConnection,
     ):
         self.total_sats = total_sats
         self.sat_positions = sat_positions
+        self.total_gsts = total_gsts
+        self.gst_positions = gst_positions
         self.earth_radius = earth_radius
         self.current_simulation_time = current_simulation_time
         self.last_animate = 0
@@ -102,6 +110,8 @@ class Animation():
 
         if self.total_sats > 0:
             self.make_sats_actor(self.total_sats, self.sat_positions)
+        if self.total_gsts > 0:
+            self.make_gsts_actor(self.total_gsts, self.gst_positions)
 
         self.make_link_actors()
 
@@ -113,10 +123,9 @@ class Animation():
 
         self.make_render_window()
 
-
-###############################################################################
-#                           ANIMATION FUNCTIONS                               #
-###############################################################################
+    ###############################################################################
+    #                           ANIMATION FUNCTIONS                               #
+    ###############################################################################
 
     """
     Like me, you might wonder what the numerous vkt calls are for.
@@ -143,13 +152,14 @@ class Animation():
     """
 
     def setup_animation(
-            self,
-            total_satellites: int,
-            satellite_positions: np.ndarray,
-            total_groundpoints: int,
-            groundpoint_positions: np.ndarray,
-            timestep: int = 60,
-            current_simulation_time: int = 0) -> None:
+        self,
+        total_satellites: int,
+        satellite_positions: np.ndarray,
+        total_groundpoints: int,
+        groundpoint_positions: np.ndarray,
+        timestep: int = 60,
+        current_simulation_time: int = 0,
+    ) -> None:
         """
         Makes vtk render window, and sets up pipelines.
 
@@ -171,7 +181,6 @@ class Animation():
             If true, save images of the render window to file
 
         """
-
 
     def update_animation(self, obj: typing.Any, event: typing.Any) -> None:
         """
@@ -195,7 +204,7 @@ class Animation():
         steps_to_animate = self.current_simulation_time - self.last_animate
         self.last_animate = self.current_simulation_time
 
-        rotation_per_time_step = 360.0/(SECONDS_PER_DAY) * steps_to_animate
+        rotation_per_time_step = 360.0 / (SECONDS_PER_DAY) * steps_to_animate
         self.earthActor.RotateZ(rotation_per_time_step)
         self.sphereActor.RotateZ(rotation_per_time_step)
 
@@ -203,22 +212,22 @@ class Animation():
         new_sat_positions = self.sat_positions
         # update sat points
         for i in range(self.totalSats):
-            x = new_sat_positions[i]['x']
-            y = new_sat_positions[i]['y']
-            z = new_sat_positions[i]['z']
+            x = new_sat_positions[i]["x"]
+            y = new_sat_positions[i]["y"]
+            z = new_sat_positions[i]["z"]
             self.satVtkPts.SetPoint(self.satPointIDs[i], x, y, z)
         self.satPolyData.GetPoints().Modified()
 
         # grab the arrays of connections
         links = self.links
         points = self.points
-        maxSatIdx = self.total_sats-1
+        maxSatIdx = self.total_sats - 1
 
         # build a vtkPoints object from array
         self.linkPoints = vtk.vtkPoints()
         self.linkPoints.SetNumberOfPoints(len(points))
         for i in range(len(points)):
-            self.linkPoints.SetPoint(i, points[i]['x'], points[i]['y'], points[i]['z'])
+            self.linkPoints.SetPoint(i, points[i]["x"], points[i]["y"], points[i]["z"])
 
         # make clean line arrays
         self.islLinkLines = vtk.vtkCellArray()
@@ -227,15 +236,15 @@ class Animation():
 
         # fill isl and gsl arrays
         for i in range(len(links)):
-            e1 = links[i]['node_1']
-            e2 = links[i]['node_2']
+            e1 = links[i]["node_1"]
+            e2 = links[i]["node_2"]
             # must translate link endpoints to point names
             # if endpoint name is positive, we use it directly
             # if negative, idx = maxSatIdx-endpointname
             # **ground endpoints are always node_1**
             if e1 < 0:
                 self.sglLinkLines.InsertNextCell(2)
-                self.sglLinkLines.InsertCellPoint(maxSatIdx-e1)
+                self.sglLinkLines.InsertCellPoint(maxSatIdx - e1)
                 self.sglLinkLines.InsertCellPoint(e2)
             else:
                 self.islLinkLines.InsertNextCell(2)
@@ -282,22 +291,24 @@ class Animation():
         self.renderer.SetBackground(BACKGROUND_COLOR)
 
         self.interactor.Initialize()
-        print('initialized interactor')
+        print("initialized interactor")
 
         # set up a timer to call the update function at a max rate
         # of every 7 ms (~144 hz)
-        self.interactor.AddObserver('TimerEvent', self.update_animation)
+        self.interactor.AddObserver("TimerEvent", self.update_animation)
         self.interactor.CreateRepeatingTimer(7)
-        print('set up timer')
+        print("set up timer")
 
         # start the model
         self.renderWindow.SetSize(2048, 2048)
         self.renderWindow.Render()
-        print('started render')
+        print("started render")
         self.interactor.Start()
-        print('started interactor')
+        print("started interactor")
 
-    def make_sats_actor(self, total_satellites: int, satellite_positions: np.ndarray) -> None:
+    def make_sats_actor(
+        self, total_satellites: int, satellite_positions: np.ndarray
+    ) -> None:
         """
         generate the point cloud to represent satellites
 
@@ -322,9 +333,10 @@ class Animation():
         # initialize all the positions
         for i in range(self.totalSats):
             self.satPointIDs[i] = self.satVtkPts.InsertNextPoint(
-                satellite_positions[i]['x'],
-                satellite_positions[i]['y'],
-                satellite_positions[i]['z'])
+                satellite_positions[i]["x"],
+                satellite_positions[i]["y"],
+                satellite_positions[i]["z"],
+            )
 
             self.satVtkVerts.InsertNextCell(1)
             self.satVtkVerts.InsertCellPoint(self.satPointIDs[i])
@@ -349,6 +361,9 @@ class Animation():
         self.satsActor.GetProperty().SetColor(SAT_COLOR)
         self.satsActor.GetProperty().SetPointSize(SAT_POINT_SIZE)
 
+    def make_gsts_actor(self, total_gsts, gst_positions):
+        print("TODO")
+
     def make_link_actors(self) -> None:
         """
         generate the lines to represent links
@@ -361,27 +376,27 @@ class Animation():
         # grab the arrays of connections
         links = self.links
         points = self.points
-        maxSatIdx = self.total_sats-1
+        maxSatIdx = self.total_sats - 1
 
         # build a vtkPoints object from array
         self.linkPoints = vtk.vtkPoints()
         self.linkPoints.SetNumberOfPoints(len(points))
         for i in range(len(points)):
-            self.linkPoints.SetPoint(i, points[i]['x'], points[i]['y'], points[i]['z'])
+            self.linkPoints.SetPoint(i, points[i]["x"], points[i]["y"], points[i]["z"])
 
         # build a cell array to represent connectivity
         self.islLinkLines = vtk.vtkCellArray()
         self.sglLinkLines = vtk.vtkCellArray()
         for i in range(len(links)):
-            e1 = links[i]['node_1']
-            e2 = links[i]['node_2']
+            e1 = links[i]["node_1"]
+            e2 = links[i]["node_2"]
             # must translate link endpoints to point names
             # if endpoint name is positive, we use it directly
             # if negative, idx = maxSatIdx-endpointname
             # **ground endpoints are always node_1**
             if e1 < 0:
                 self.sglLinkLines.InsertNextCell(2)
-                self.sglLinkLines.InsertCellPoint(maxSatIdx-e1)
+                self.sglLinkLines.InsertCellPoint(maxSatIdx - e1)
                 self.sglLinkLines.InsertCellPoint(e2)
             else:
                 self.islLinkLines.InsertNextCell(2)
@@ -484,7 +499,7 @@ class Animation():
         num_pts = EARTH_SPHERE_POINTS
         indices = np.arange(0, num_pts, dtype=float) + 0.5
         phi = np.arccos(1 - 2 * indices / num_pts)
-        theta = np.pi * (1 + 5 ** 0.5) * indices
+        theta = np.pi * (1 + 5**0.5) * indices
         x = np.cos(theta) * np.sin(phi) * self.earthRadius
         y = np.sin(theta) * np.sin(phi) * self.earthRadius
         z = np.cos(phi) * self.earthRadius
@@ -522,6 +537,50 @@ class Animation():
         self.sphereActor.GetProperty().SetColor(EARTH_BASE_COLOR)
         self.sphereActor.GetProperty().SetOpacity(EARTH_OPACITY)
 
+    def makeGstActor(self, gst_num: int) -> None:
+        """
+        generate the point cloud to represent ground stations
+
+        :param gst_num: number of ground stations
+        """
+
+        # declare a points & cell array to hold position data
+        self.gst_actor.gstVtkPts = vtk.vtkPoints()
+        self.gst_actor.gstVtkVerts = vtk.vtkCellArray()
+
+        # init a array for IDs
+        self.gst_actor.gstPointIDs = [None] * gst_num
+
+        # initialize all the positions
+        for i in range(len(self.gst_positions)):
+            self.gst_actor.gstPointIDs[i] = self.gst_actor.gstVtkPts.InsertNextPoint(
+                self.gst_positions[i]["x"],
+                self.gst_positions[i]["y"],
+                self.gst_positions[i]["z"],
+            )
+
+            self.gst_actor.gstVtkVerts.InsertNextCell(1)
+            self.gst_actor.gstVtkVerts.InsertCellPoint(self.gst_actor.gstPointIDs[i])
+
+        # convert points into poly data
+        # (because that's what they do in the vtk examples)
+        self.gst_actor.gstPolyData = vtk.vtkPolyData()
+        self.gst_actor.gstPolyData.SetPoints(self.gst_actor.gstVtkPts)
+        self.gst_actor.gstPolyData.SetVerts(self.gst_actor.gstVtkVerts)
+
+        # create mapper object and connect to the poly data
+        self.gst_actor.gstsMapper = vtk.vtkPolyDataMapper()
+        self.gst_actor.gstsMapper.SetInputData(self.gst_actor.gstPolyData)
+
+        # create actor, and connect to the mapper
+        # (again, its just what you do to make a vtk render pipeline)
+        self.gst_actor.gstsActor = vtk.vtkActor()
+        self.gst_actor.gstsActor.SetMapper(self.gst_actor.gstsMapper)
+
+        # edit appearance of groundstations
+        self.gst_actor.gstsActor.GetProperty().SetOpacity(GS_OPACITY)
+        self.gst_actor.gstsActor.GetProperty().SetColor(GS_COLOR)
+        self.gst_actor.gstsActor.GetProperty().SetPointSize(GS_POINT_SIZE)
 
     def control_thread_handler(self) -> None:
         """
@@ -536,7 +595,7 @@ class Animation():
                 command = received_data[0]
                 new_data = received_data[1]
                 if command == "sat_positions":
-                    #print(new_data[0])
+                    # print(new_data[0])
                     self.sat_positions = new_data
                 if command == "links":
                     self.links = new_data
