@@ -80,12 +80,65 @@ def run_simulation(
 
 
 if __name__ == "__main__":
+    # Generate ground stations
+    ground_stations = [
+        GroundStation(
+            "North Pole",
+            90.0,
+            0.0,
+            25.0,
+        ),
+        GroundStation(
+            "South Pole",
+            -90.0,
+            0.0,
+            25.0,
+        ),
+    ]
 
-    ground_stations = [GroundStation("Testing 1", 0.0, 0.0, 25.0)]
+    for long in range(0, 90, 10):
+        equator = GroundStation(
+            f"equator_{long}",
+            0,
+            long,
+            25,
+        )
+        ground_stations.append(equator)
+        for lat in range(10, 90, 10):
+            # TODO: could be more accurate with min_elevation in high latitudes
+            north = GroundStation(
+                f"north_{lat}_{long}",
+                lat,
+                long,
+                25,
+            )
+            south = GroundStation(
+                f"south_{lat}_{long}",
+                -lat,
+                -long,
+                25,
+            )
+            ground_stations.append(north)
+            ground_stations.append(south)
 
     with concurrent.futures.ProcessPoolExecutor() as executor:
+
         for s in config.SHELLS:
-            run_simulation(
+            # run_simulation(
+            #     config.STEPS,
+            #     config.INTERVAL,
+            #     int(s["planes"]),
+            #     int(s["sats"]),
+            #     float(s["inc"]),
+            #     int(s["altitude"]),
+            #     s["name"],
+            #     ground_stations,
+            #     config.DISTANCES_DIR,
+            #     config.SAT_POSITIONS_DIR,
+            #     config.GS_POSITIONS_DIR,
+            # )
+            executor.submit(
+                run_simulation,
                 config.STEPS,
                 config.INTERVAL,
                 int(s["planes"]),
@@ -98,4 +151,3 @@ if __name__ == "__main__":
                 config.SAT_POSITIONS_DIR,
                 config.GS_POSITIONS_DIR,
             )
-            # executor.submit(run_simulation, config.STEPS, config.INTERVAL, int(s["planes"]), int(s["sats"]), float(s["inc"]), int(s["altitude"]), s["name"], config.DISTANCES_DIR)

@@ -28,8 +28,7 @@ MODEL = "SGP4"
 INTERVAL = 1
 
 # total length of the simulation in seconds
-STEPS = 700  # a bit over one orbital period for the lowest orbit
-# STEPS = 8640
+STEPS = 5_754  # longest orbital period for Starlink shells
 
 # speed of light in km/s
 C = scipy.constants.speed_of_light / 1_000.0
@@ -49,38 +48,38 @@ RESULTS_FILE = os.path.join(__root, "results.csv")
 
 # constellation shells to consider
 SHELLS = [
-    # {  # 1,584 satellites
-    #     "name": "st1",
-    #     "pretty_name": "Starlink 1",
-    #     "planes": 72,
-    #     "sats": 22,
-    #     "altitude": 550,
-    #     "inc": 53.0,
-    # },
-    # {  # 1,584 satellites
-    #     "name": "st2",
-    #     "pretty_name": "Starlink 2",
-    #     "planes": 72,
-    #     "sats": 22,
-    #     "altitude": 540,
-    #     "inc": 53.2,
-    # },
-    # {  # 720 satellites
-    #     "name": "st3",
-    #     "pretty_name": "Starlink 3",
-    #     "planes": 36,
-    #     "sats": 20,
-    #     "altitude": 570,
-    #     "inc": 70.0,
-    # },
-    # {  # 348 satellites
-    #     "name": "st4",
-    #     "pretty_name": "Starlink 4",
-    #     "planes": 6,
-    #     "sats": 58,
-    #     "altitude": 560,
-    #     "inc": 97.6,
-    # },
+    {  # 1,584 satellites
+        "name": "st1",
+        "pretty_name": "Starlink 1",
+        "planes": 72,
+        "sats": 22,
+        "altitude": 550,
+        "inc": 53.0,
+    },
+    {  # 1,584 satellites
+        "name": "st2",
+        "pretty_name": "Starlink 2",
+        "planes": 72,
+        "sats": 22,
+        "altitude": 540,
+        "inc": 53.2,
+    },
+    {  # 720 satellites
+        "name": "st3",
+        "pretty_name": "Starlink 3",
+        "planes": 36,
+        "sats": 20,
+        "altitude": 570,
+        "inc": 70.0,
+    },
+    {  # 348 satellites
+        "name": "st4",
+        "pretty_name": "Starlink 4",
+        "planes": 6,
+        "sats": 58,
+        "altitude": 560,
+        "inc": 97.6,
+    },
     {  # 172 satellites
         "name": "st5",
         "pretty_name": "Starlink 5",
