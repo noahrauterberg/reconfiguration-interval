@@ -28,7 +28,7 @@ MODEL = "SGP4"
 INTERVAL = 1
 
 # total length of the simulation in seconds
-STEPS = 5_754  # longest orbital period for Starlink shells
+STEPS = 5_760  # longest orbital period for Starlink shells + a bit to have a multiple of 15 seconds
 
 # speed of light in km/s
 C = scipy.constants.speed_of_light / 1_000.0
