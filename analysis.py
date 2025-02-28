@@ -166,15 +166,6 @@ if __name__ == "__main__":
     gs0 = gs_pos[0]
     isl_dist0 = isl_dist[0]
 
-    # This is commented out because ground stations are not duplicated
-    # original_len = len(gs0)
-    # gs0.drop_duplicates(subset=["lat", "long"], keep="first", inplace=True)
-    # print(f"Removed {original_len - len(gs0)} duplicates")
-
-    # We read the gsls form the file anyway, so this is currently not needed
-    # gsls = gsls_for_interval(sat_pos, gs_pos)
-    # gsls.to_csv("debug/gsls.csv", index=False)
-
     G = generate_graph(sat0, gs0, isl_dist0, gsls)
 
     path = nx.shortest_path(G, source="gs_30_10", target="gs_0_0", weight="weight")
