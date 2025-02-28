@@ -64,7 +64,7 @@ def run_simulation(
         ) as gs_pos:
             sat_links.write("a,b,distance\n")
             sat_pos.write("id,x,y,z\n")
-            gs_pos.write("name,x,y,z\n")
+            gs_pos.write("lat,long,x,y,z,max_gsl_dist\n")
 
             s.update_model(
                 new_time=next_time,

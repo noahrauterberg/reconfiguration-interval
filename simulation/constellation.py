@@ -83,6 +83,8 @@ GROUNDPOINT_DTYPE = np.dtype(
         ("x", np.int32),  # x position in meters
         ("y", np.int32),  # y position in meters
         ("z", np.int32),  # z position in meters
+        ("lat", np.int32),  # latitude in degrees
+        ("long", np.int32),  # longitude in degrees
     ]
 )
 
@@ -386,18 +388,25 @@ class Constellation:
             init_pos[0] = self.earth_radius * math.cos(latitude) * math.cos(longitude)
             init_pos[1] = self.earth_radius * math.cos(latitude) * math.sin(longitude)
             init_pos[2] = self.earth_radius * math.sin(latitude)
+            gsl_range = self.calculate_max_space_to_gnd_distance(g.min_elevation)
 
-            new_gs = np.zeros(1, dtype=GROUNDPOINT_DTYPE)[0]
-            new_gs["ID"] = np.int16(idx)
-            new_gs["max_gsl_range"] = self.calculate_max_space_to_gnd_distance(
-                g.min_elevation
-            )
-            new_gs["init_x"] = np.int32(init_pos[0])
-            new_gs["init_y"] = np.int32(init_pos[1])
-            new_gs["init_z"] = np.int32(init_pos[2])
-            new_gs["x"] = np.int32(init_pos[0])
-            new_gs["y"] = np.int32(init_pos[1])
-            new_gs["z"] = np.int32(init_pos[2])
+            new_gs = np.array(
+                [
+                    (
+                        idx,
+                        gsl_range,
+                        np.int32(init_pos[0]),
+                        np.int32(init_pos[1]),
+                        np.int32(init_pos[2]),
+                        np.int32(init_pos[0]),
+                        np.int32(init_pos[1]),
+                        np.int32(init_pos[2]),
+                        np.int32(g.lat),
+                        np.int32(g.lng),
+                    )
+                ],
+                dtype=GROUNDPOINT_DTYPE,
+            )[0]
 
             self.groundstations[idx] = new_gs
 
@@ -430,6 +439,11 @@ class Constellation:
 
     def get_gs_positions(self) -> npt.NDArray[any]:
         return np.copy(self.groundstations[["x", "y", "z"]])
+
+    def get_gs_data(self) -> npt.NDArray[any]:
+        return np.copy(
+            self.groundstations[["lat", "long", "x", "y", "z", "max_gsl_range"]]
+        )
 
     def get_array_of_links(self) -> npt.NDArray[any]:
         """copies a sub array of link data

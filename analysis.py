@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import config
-import data_loader as dl
 import networkx as nx
 import matplotlib.pyplot as plt
 import typing
@@ -13,8 +12,51 @@ def main():
     print("NOT YET IMPLEMENTED")
 
 
+def generate_graph(
+    sat_positions: pd.DataFrame,
+    gs_positions: pd.DataFrame,
+    isl_distances: pd.DataFrame,
+    gsls: pd.DataFrame,
+) -> nx.Graph:
+    """Generates a graph from the given dataframes.
+
+    Args:
+        sat_positions (pd.DataFrame): positions of the satellites, columns: 'id', 'x', 'y', 'z'
+        gs_positions (pd.DataFrame): positions of the ground stations, columns: 'lat', 'long, 'x', 'y', 'z', 'max_gsl_dist'
+        isl_distances (pd.DataFrame): inter-satellite links, columns: 'a', 'b', 'distance'
+        gsls (pd.DataFrame): ground-satellite links, columns: 'satellite', 'ground_station', 'distance'
+
+    Returns:
+        nx.Graph: _description_
+    """
+    G = nx.Graph()
+    for _, sat in sat_positions.iterrows():
+        G.add_node(f"sat_{sat['id']}", pos=(sat["x"], sat["y"]))
+
+    for _, gs in gs_positions.iterrows():
+        G.add_node(f"gs_{gs['lat']}_{gs['long']}", pos=(gs["x"], gs["y"]))
+
+    for _, isl in isl_distances.iterrows():
+        G.add_edge(
+            f"sat_{int(isl['a'])}", f"sat_{int(isl['b'])}", weight=isl["distance"]
+        )
+
+    for _, gsl in gsls.iterrows():
+        G.add_edge(
+            f"sat_{(gsl['satellite'])}",
+            f"gs_{(gsl['ground_station'])}",
+            weight=gsl["distance"],
+        )
+
+    return G
+
+
 def load_interval(
     start_time: int,
+    gs_positions_dir: str = f"{config.GS_POSITIONS_DIR}/st1",
+    sat_positions_dir: str = f"{config.SAT_POSITIONS_DIR}/st1",
+    isl_distances_dir: str = f"{config.DISTANCES_DIR}/st1",
+    interval_length: int = INTERVAL_LENGTH,
 ) -> typing.Tuple[
     typing.Dict[str, pd.DataFrame],
     typing.Dict[str, pd.DataFrame],
@@ -25,19 +67,16 @@ def load_interval(
 
     :param
     start_time: The start time of the interval.
-    :return: A tuple containing the satellite positions, ground station positions, and inter-satellite distances.
+    :return: A tuple containing the satellite positions, ground station positions, and inter-satellite distances for each timestep in the interval.
     """
     ret_sat_pos = {}
     ret_gs_pos = {}
     ret_isl_dist = {}
 
-    for time in range(start_time, start_time + INTERVAL_LENGTH):
-        # sat_pos = dl.load_file(f"debug/sat_pos/{time}.csv")
-        # gs_pos = dl.load_file(f"debug/gs_pos/{time}.csv")
-        # isl_dist = dl.load_file(f"debug/isls/{time}.csv")
-        sat_pos = dl.load_file(f"{config.SAT_POSITIONS_DIR}/st1/{time}.csv")
-        gs_pos = dl.load_file(f"{config.GS_POSITIONS_DIR}/st1/{time}.csv")
-        isl_dist = dl.load_file(f"{config.DISTANCES_DIR}/st1/{time}.csv")
+    for time in range(start_time, start_time + interval_length):
+        gs_pos = pd.read_csv(f"{gs_positions_dir}/{time}.csv")
+        sat_pos = pd.read_csv(f"{sat_positions_dir}/{time}.csv")
+        isl_dist = pd.read_csv(f"{isl_distances_dir}/{time}.csv")
 
         ret_sat_pos[time] = sat_pos
         ret_gs_pos[time] = gs_pos
@@ -53,7 +92,7 @@ def possible_gsls(
 
     Args:
         sat_positions (pd.DataFrame): Positions of the satellites, columns: 'id', 'x', 'y', 'z'
-        gs_positions (pd.DataFrame): Positions of the ground stations, columns: 'name', 'x', 'y', 'z'
+        gs_positions (pd.DataFrame): Positions of the ground stations, columns: 'lat', 'long, 'x', 'y', 'z', 'max_gsl_dist'
 
     Returns:
         pd.DataFrame: DataFrame with all possible GSLs, columns: 'satellite', 'ground_station', 'distance'
@@ -64,10 +103,10 @@ def possible_gsls(
             sat_pos = np.array([sat["x"], sat["y"], sat["z"]])
             gs_pos = np.array([gs["x"], gs["y"], gs["z"]])
             gsl_len = np.linalg.norm(gs_pos - sat_pos)
-            if gsl_len <= max_gsl_dist:
+            if gsl_len <= gs["max_gsl_dist"]:
                 link = {
                     "satellite": sat["id"],
-                    "ground_station": gs["name"],
+                    "ground_station": f"{gs['lat']}_{gs['long']}",
                     "distance": gsl_len,
                 }
                 possible_gsls.append(link)
@@ -98,10 +137,6 @@ def gsls_for_interval(
         gs_positions = gs_interval_positions[t]
         gsls.append(possible_gsls(sat_positions, gs_positions))
 
-    # This is only for debugging:
-    if len(timesteps) == 1:
-        return gsls[0]
-
     common_sat_gsls = set.intersection(
         *[set(zip(df["satellite"], df["ground_station"])) for df in gsls]
     )
@@ -124,8 +159,23 @@ def gsls_for_interval(
 
 
 if __name__ == "__main__":
-    max_gsl_dist = 1141384  # this is constant for now, but in reality depends on the altitude of the satellite
+    gsls = pd.read_csv("debug/gsls.csv")
 
     sat_pos, gs_pos, isl_dist = load_interval(0)
-    gsls = gsls_for_interval(sat_pos, gs_pos).sort_values(by=["ground_station"])
-    gsls.to_csv("debug/gsls.csv", index=False)
+    sat0 = sat_pos[0]
+    gs0 = gs_pos[0]
+    isl_dist0 = isl_dist[0]
+
+    # This is commented out because ground stations are not duplicated
+    # original_len = len(gs0)
+    # gs0.drop_duplicates(subset=["lat", "long"], keep="first", inplace=True)
+    # print(f"Removed {original_len - len(gs0)} duplicates")
+
+    # We read the gsls form the file anyway, so this is currently not needed
+    # gsls = gsls_for_interval(sat_pos, gs_pos)
+    # gsls.to_csv("debug/gsls.csv", index=False)
+
+    G = generate_graph(sat0, gs0, isl_dist0, gsls)
+
+    path = nx.shortest_path(G, source="gs_30_10", target="gs_0_0", weight="weight")
+    print(f"Shortest path from lat30, long10 to Null Island: {path}")

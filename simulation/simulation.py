@@ -218,9 +218,11 @@ class Simulation:
                 positions_file.write("{},{},{},{}\n".format(id, pos[0], pos[1], pos[2]))
 
         if gs_file is not None:
-            gs_positions = self.model.get_gs_positions()
-            for id, pos in enumerate(gs_positions):
-                gs_file.write("{},{},{},{}\n".format(id, pos[0], pos[1], pos[2]))
+            ground_stations = self.model.get_gs_data()
+            for g in ground_stations:
+                gs_file.write(
+                    f'{g["lat"]},{g["long"]},{g["x"]},{g["y"]},{g["z"]},{g["max_gsl_range"]}\n'
+                )
 
         if self.report_status:
             time_4 = time.time()
