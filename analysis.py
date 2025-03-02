@@ -4,12 +4,73 @@ import config
 import networkx as nx
 import matplotlib.pyplot as plt
 import typing
+import scipy.constants as const
 
 INTERVAL_LENGTH = 15
 
 
 def main():
     print("NOT YET IMPLEMENTED")
+
+
+def paths_to_df(
+    paths: dict[str, typing.List[str]],
+    df: pd.DataFrame,
+    G: nx.Graph,
+    time: int,
+):
+    """Adds given paths to the given dataframe including a latency assumption and the given time.
+    The latency is calculated by multiplying the total path length with the speed of light.
+
+    Args:
+        paths (dict[str, typing.List[str]]): Dictionary containing the paths from each source to the target with the source node as key
+        df (pd.DataFrame): DataFrame to add the paths to
+        G (nx.Graph): Graph to calculate the path length on
+        time (int): Time of the paths
+    """
+    for source, path in paths.items():
+        if path:
+            distance = nx.path_weight(G, path, "weight")
+            df.loc[len(df)] = {
+                "source": source,
+                "target": path[-1],
+                "path": path,
+                "latency": distance * const.c,
+                "time": time,
+            }
+        else:
+            df.loc[len(df)] = {
+                "source": source,
+                "target": "gs_0_0",
+                "path": [],
+                "latency": np.nan,
+                "time": time,
+            }
+
+
+def shortest_paths(
+    G: nx.Graph, sources: typing.List[str], target: str
+) -> dict[str, typing.List[str]]:
+    """Computes the shortest path from each source to the target.
+
+    Args:
+        G (nx.Graph): Graph to compute the shortest paths on
+        sources (typing.List[str]): List of source nodes, most likely all (other) ground stations than the target
+        target (str): Target node
+    Returns:
+        dict[str, typing.List[str]]: Dictionary containing the shortest path from each source to the target, key is the source node
+    """
+    paths = {}
+    nodes_with_no_path = []
+    for source in sources:
+        try:
+            path = nx.shortest_path(G, source=source, target=target, weight="weight")
+            paths[source] = path
+        except nx.NetworkXNoPath:
+            nodes_with_no_path.append(source)
+            paths[source] = []
+    print(f"Couldn't find a path for the following nodes:\n{nodes_with_no_path}")
+    return paths
 
 
 def generate_graph(
@@ -65,9 +126,10 @@ def load_interval(
     """
     Load the satellite positions, ground station positions, and inter-satellite distances for the given interval.
 
-    :param
-    start_time: The start time of the interval.
-    :return: A tuple containing the satellite positions, ground station positions, and inter-satellite distances for each timestep in the interval.
+    Args:
+        start_time: The start time of the interval.
+    Returns:
+        A tuple containing the satellite positions, ground station positions, and inter-satellite distances for each timestep in the interval.
     """
     ret_sat_pos = {}
     ret_gs_pos = {}
@@ -158,15 +220,40 @@ def gsls_for_interval(
     ]
 
 
+def gs_pos_to_gs_list(gs_positions: pd.DataFrame) -> typing.List[str]:
+    ret = []
+    for _, gs in gs_positions.iterrows():
+        ret.append(f"gs_{gs['lat']}_{gs['long']}")
+    return ret
+
+
 if __name__ == "__main__":
-    gsls = pd.read_csv("debug/gsls.csv")
+    total_steps = 10
+    INTERVAL_LENGTH = 5
 
-    sat_pos, gs_pos, isl_dist = load_interval(0)
-    sat0 = sat_pos[0]
-    gs0 = gs_pos[0]
-    isl_dist0 = isl_dist[0]
+    df = pd.DataFrame(
+        {
+            "source": pd.Series(dtype=str),
+            "target": pd.Series(dtype=str),
+            "path": pd.Series(dtype=object),
+            "latency": pd.Series(dtype=float),
+            "time": pd.Series(dtype=int),
+        }
+    )
+    for step in range(0, total_steps, INTERVAL_LENGTH):
+        sat_pos, gs_pos, isl_dist = load_interval(step)
+        gsls = gsls_for_interval(sat_pos, gs_pos)
+        # gsls.to_csv("debug/gsls.csv")
+        # gsls = pd.read_csv("debug/gsls.csv")
 
-    G = generate_graph(sat0, gs0, isl_dist0, gsls)
-
-    path = nx.shortest_path(G, source="gs_30_10", target="gs_0_0", weight="weight")
-    print(f"Shortest path from lat30, long10 to Null Island: {path}")
+        for t in range(0, INTERVAL_LENGTH):
+            sat_positions = sat_pos[step + t]
+            gs_positions = gs_pos[step + t]
+            isl_distances = isl_dist[step + t]
+            # This is inaccurate as gsls only represents average distances over the whole interval
+            # This should be relatively easy to fix as the GSLs are already calculated and just need to be returned by gsls_for_interval
+            # TODO for future me, not a priority
+            G = generate_graph(sat_positions, gs_positions, isl_distances, gsls)
+            paths = shortest_paths(G, gs_pos_to_gs_list(gs_positions), "gs_0_0")
+            paths_to_df(paths, df, G, t)
+    df.to_csv("debug/paths.csv")
