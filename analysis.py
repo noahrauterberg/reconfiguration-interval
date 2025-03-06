@@ -2,15 +2,45 @@ import numpy as np
 import pandas as pd
 import config
 import networkx as nx
-import matplotlib.pyplot as plt
 import typing
+import os
 import scipy.constants as const
 
 INTERVAL_LENGTH = 15
+TOTAL_STEPS = 150
 
 
 def main():
-    print("NOT YET IMPLEMENTED")
+    df = pd.DataFrame(
+        {
+            "source": pd.Series(dtype=str),
+            "target": pd.Series(dtype=str),
+            "path": pd.Series(dtype=object),
+            "latency": pd.Series(dtype=float),
+            "time": pd.Series(dtype=int),
+        }
+    )
+    for step in range(0, TOTAL_STEPS, INTERVAL_LENGTH):
+        print(f"Processing step {step}")
+        sat_pos, gs_pos, isl_dist = load_interval(step)
+        # gsls = pd.read_csv("debug/gsls.csv")
+        gsls = gsls_for_interval(sat_pos, gs_pos)
+        gsls.to_csv(os.path.join(config.GSLS_DIR, f"{step}.csv"))
+
+        for t in range(0, INTERVAL_LENGTH):
+            sat_positions = sat_pos[step + t]
+            gs_positions = gs_pos[step + t]
+            isl_distances = isl_dist[step + t]
+            # This is inaccurate as gsls only represents average distances over the whole interval
+            # This should be relatively easy to fix as the GSLs are already calculated and just need to be returned by gsls_for_interval
+            # TODO for future me, not a priority
+            G = generate_graph(sat_positions, gs_positions, isl_distances, gsls)
+            paths = shortest_paths(G, gs_pos_to_gs_list(gs_positions), "gs_0_0")
+            paths_to_df(paths, df, G, t)
+    df.to_csv("debug/paths.csv")
+    _, _, isl_df = load_interval(0)
+    # the time of the isls does not matter as it is only used as a basis for which links exist and this remains stable in a +grid network
+    _ = linkwise_analysis(df, isl_df[0])
 
 
 def paths_to_df(
@@ -61,15 +91,12 @@ def shortest_paths(
         dict[str, typing.List[str]]: Dictionary containing the shortest path from each source to the target, key is the source node
     """
     paths = {}
-    nodes_with_no_path = []
     for source in sources:
         try:
             path = nx.shortest_path(G, source=source, target=target, weight="weight")
             paths[source] = path
         except nx.NetworkXNoPath:
-            nodes_with_no_path.append(source)
             paths[source] = []
-    print(f"Couldn't find a path for the following nodes:\n{nodes_with_no_path}")
     return paths
 
 
@@ -119,9 +146,9 @@ def load_interval(
     isl_distances_dir: str = f"{config.DISTANCES_DIR}/st1",
     interval_length: int = INTERVAL_LENGTH,
 ) -> typing.Tuple[
-    typing.Dict[str, pd.DataFrame],
-    typing.Dict[str, pd.DataFrame],
-    typing.Dict[str, pd.DataFrame],
+    typing.Dict[int, pd.DataFrame],
+    typing.Dict[int, pd.DataFrame],
+    typing.Dict[int, pd.DataFrame],
 ]:
     """
     Load the satellite positions, ground station positions, and inter-satellite distances for the given interval.
@@ -227,33 +254,50 @@ def gs_pos_to_gs_list(gs_positions: pd.DataFrame) -> typing.List[str]:
     return ret
 
 
-if __name__ == "__main__":
-    total_steps = 10
-    INTERVAL_LENGTH = 5
+def linkwise_analysis(connections: pd.DataFrame, isls: pd.DataFrame) -> pd.DataFrame:
+    """Performs a linkwise analysis on the given connections of the dataframe.
+    This is limited to ISLs as GSLs are by definition only used by one GS and satellite.
 
-    df = pd.DataFrame(
+    Args:
+        connections (pd.DataFrame): DataFrame containing the connections to analyze, columns: "source", "target", "path", "latency", "time"
+        isls (pd.DataFrame): DataFrame containing the ISLs, columns: "a", "b", "distance"
+
+    Returns:
+        pd.DataFrame: DataFrame containing the linkwise analysis, columns: "node_a", "node_b", "used_by"
+    """
+    linkwise = pd.DataFrame(
         {
-            "source": pd.Series(dtype=str),
-            "target": pd.Series(dtype=str),
-            "path": pd.Series(dtype=object),
-            "latency": pd.Series(dtype=float),
-            "time": pd.Series(dtype=int),
+            "node_a": pd.Series(dtype=int),
+            "node_b": pd.Series(dtype=int),
+            "used_by": pd.Series(dtype=int),
         }
     )
-    for step in range(0, total_steps, INTERVAL_LENGTH):
-        sat_pos, gs_pos, isl_dist = load_interval(step)
-        gsls = gsls_for_interval(sat_pos, gs_pos)
-        # gsls.to_csv("debug/gsls.csv")
-        # gsls = pd.read_csv("debug/gsls.csv")
+    # Add all ISLs to the linkwise DataFrame
+    for _, isl in isls.iterrows():
+        linkwise.loc[len(linkwise)] = {
+            "node_a": isl["a"],
+            "node_b": isl["b"],
+            "used_by": 0,
+        }
 
-        for t in range(0, INTERVAL_LENGTH):
-            sat_positions = sat_pos[step + t]
-            gs_positions = gs_pos[step + t]
-            isl_distances = isl_dist[step + t]
-            # This is inaccurate as gsls only represents average distances over the whole interval
-            # This should be relatively easy to fix as the GSLs are already calculated and just need to be returned by gsls_for_interval
-            # TODO for future me, not a priority
-            G = generate_graph(sat_positions, gs_positions, isl_distances, gsls)
-            paths = shortest_paths(G, gs_pos_to_gs_list(gs_positions), "gs_0_0")
-            paths_to_df(paths, df, G, t)
-    df.to_csv("debug/paths.csv")
+    for _, conn in connections.iterrows():
+        path = conn["path"]
+        for i in range(1, len(path) - 2):
+            node_1 = int(path[i].removeprefix("sat_"))
+            node_2 = int(path[i + 1].removeprefix("sat_"))
+            # The range excludes the GSLs
+            cond_ab = (linkwise["node_a"] == node_1) & (linkwise["node_b"] == node_2)
+            cond_ba = (linkwise["node_a"] == node_2) & (linkwise["node_b"] == node_1)
+            mask = cond_ab | cond_ba
+            linkwise.loc[mask, "used_by"] += 1
+
+    linkwise.to_csv("debug/linkwise.csv", index=False)
+    return linkwise
+
+
+if __name__ == "__main__":
+    main()
+    # sat_pos, gs_pos, isl_dist = load_interval(0)
+    # df = pd.read_csv("debug/paths.csv")
+    # df["path"] = df["path"].apply(eval)
+    # _ = linkwise_analysis(df, isl_dist[0])

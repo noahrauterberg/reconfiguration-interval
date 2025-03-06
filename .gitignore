@@ -15,6 +15,7 @@ graphs/
 sat-positions/
 gs-positions/
 debug/
+gsls/
 
 # go binaries
 caching/caching
