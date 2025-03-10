@@ -81,22 +81,9 @@ def run_simulation(
 
 if __name__ == "__main__":
     # Generate ground stations
-    ground_stations = [
-        GroundStation(
-            "North Pole",
-            90.0,
-            0.0,
-            25.0,
-        ),
-        GroundStation(
-            "South Pole",
-            -90.0,
-            0.0,
-            25.0,
-        ),
-    ]
+    ground_stations = []
 
-    for long in range(0, 90, 10):
+    for long in range(0, 60, 10):
         equator = GroundStation(
             f"equator_{long}",
             0,
@@ -104,8 +91,7 @@ if __name__ == "__main__":
             25,
         )
         ground_stations.append(equator)
-        for lat in range(10, 90, 10):
-            # TODO: could be more accurate with min_elevation in high latitudes
+        for lat in range(10, 60, 10):
             north = GroundStation(
                 f"north_{lat}_{long}",
                 lat,
