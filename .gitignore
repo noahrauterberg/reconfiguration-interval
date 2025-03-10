@@ -10,12 +10,14 @@ results.csv
 results.csv.BAK
 
 # results folders
+debug/
 distances-results/
 graphs/
-sat-positions/
 gs-positions/
-debug/
 gsls/
+links/
+paths/
+sat-positions/
 
 # go binaries
 caching/caching

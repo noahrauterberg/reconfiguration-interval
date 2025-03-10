@@ -5,23 +5,19 @@ import networkx as nx
 import typing
 import os
 import scipy.constants as const
-from pycallgraph2 import PyCallGraph
-from pycallgraph2.output import GraphvizOutput
+
+# from pycallgraph2 import PyCallGraph
+# from pycallgraph2.output import GraphvizOutput
 
 INTERVAL_LENGTH = 15
-TOTAL_STEPS = 150
+TOTAL_STEPS = 5_730  # one orbital period of shell 1
 
 
 def main():
-    df = pd.DataFrame(
-        {
-            "source": pd.Series(dtype=str),
-            "target": pd.Series(dtype=str),
-            "path": pd.Series(dtype=object),
-            "latency": pd.Series(dtype=float),
-            "time": pd.Series(dtype=int),
-        }
-    )
+    # Collect dfs of individual timesteps to concatenate them into a single df
+    paths_dfs = np.empty(TOTAL_STEPS, dtype=object)
+    linkwise_dfs = np.empty(TOTAL_STEPS, dtype=object)
+
     for step in range(0, TOTAL_STEPS, INTERVAL_LENGTH):
         print(f"Processing step {step}")
         sat_pos, gs_pos, isl_dist = load_interval(step)
@@ -32,49 +28,85 @@ def main():
             gs_positions = gs_pos[t]
             isl_distances = isl_dist[t]
             G = generate_graph(sat_positions, gs_positions, isl_distances, gsls[t])
-            paths = shortest_paths(G, gs_pos_to_gs_list(gs_positions), "gs_0_0")
-            paths_to_df(paths, df, G, t)
+            paths_Null_Island = shortest_paths(
+                G, gs_pos_to_gs_list(gs_positions), "gs_0_0"
+            )
+            paths_lat_25 = shortest_paths(G, gs_pos_to_gs_list(gs_positions), "gs_25_0")
+            paths_lat_50 = shortest_paths(G, gs_pos_to_gs_list(gs_positions), "gs_50_0")
 
-    df.to_csv("debug/paths.csv", index=False)
-    # the time of the isls does not matter as it is only used as a basis for which links exist and this remains stable in a +grid network
-    _, _, isl_df = load_interval(0)
-    linkwise = linkwise_analysis(df, isl_df[0])
-    linkwise.to_csv("debug/linkwise.csv", index=False)
+            # Convert to dfs and save results
+            paths_Null_Island_df = paths_to_df(
+                paths_Null_Island, G, t, default_target="gs_0_0"
+            )
+            paths_lat_25_df = paths_to_df(paths_lat_25, G, t, default_target="gs_25_0")
+            paths_lat_50_df = paths_to_df(paths_lat_50, G, t, default_target="gs_50_0")
+            all_targets_df = pd.concat(
+                [paths_Null_Island_df, paths_lat_25_df, paths_lat_50_df],
+                ignore_index=True,
+            )
+            paths_dfs[t] = all_targets_df
+            all_targets_df.to_pickle(
+                os.path.join(config.PATHS_DIR, f"{t}.pckl", "w"), index=False
+            )
+            linkwise_df = linkwise_analysis(all_targets_df, isl_distances)
+            linkwise_dfs[t] = linkwise_df
+            linkwise_df.to_pickle(
+                os.path.join(config.PATHS_DIR, f"{t}.pckl", "w"), index=False
+            )
+
+    paths = pd.concat(paths_dfs, ignore_index=True)
+    paths.to_pickle(os.path.join(config.PATHS_DIR, "all_timesteps.pckl"), index=False)
+    links = pd.concat(linkwise_dfs, ignore_index=True)
+    links.to_pickle(os.path.join(config.LINKS_DIR, "all_timesteps.pckl"), index=False)
 
 
 def paths_to_df(
     paths: dict[str, typing.List[str]],
-    df: pd.DataFrame,
     G: nx.Graph,
     time: int,
-):
-    """Adds given paths to the given dataframe including a latency assumption and the given time.
+    default_target: str = "gs_0_0",
+) -> pd.DataFrame:
+    """Returns a DataFrame for the given paths including a latency assumption and the given time.
     The latency is calculated by multiplying the total path length with the speed of light.
 
     Args:
         paths (dict[str, typing.List[str]]): Dictionary containing the paths from each source to the target with the source node as key
-        df (pd.DataFrame): DataFrame to add the paths to
         G (nx.Graph): Graph to calculate the path length on
         time (int): Time of the paths
+        default_target (str): The default target to use if there is no path
+
+    Returns:
+        pd.Dataframe: Dataframe based on given paths, columns: source, target, path, latency, time
     """
-    for source, path in paths.items():
+    # object seems to be more memory efficient than U9 (restrcting string size to 9 chars)
+    sources = np.empty(len(paths), dtype=object)
+    targets = np.empty(len(paths), dtype=object)
+    path_list = np.empty(len(paths), dtype=object)
+    latencies = np.empty(len(paths), dtype=np.float64)
+    times = np.full(len(paths), time, dtype=np.int16)
+    for idx, (source, path) in enumerate(paths.items()):
         if path:
             distance = nx.path_weight(G, path, "weight")
-            df.loc[len(df)] = {
-                "source": source,
-                "target": path[-1],
-                "path": path,
-                "latency": distance * const.c,
-                "time": time,
-            }
+            latency = distance * const.c
+
+            sources[idx] = source
+            targets[idx] = path[-1]
+            path_list[idx] = path
+            latencies[idx] = latency
         else:
-            df.loc[len(df)] = {
-                "source": source,
-                "target": "gs_0_0",
-                "path": [],
-                "latency": np.nan,
-                "time": time,
-            }
+            sources[idx] = source
+            targets[idx] = default_target
+            path_list[idx] = []
+            latencies[idx] = np.nan
+    return pd.DataFrame(
+        {
+            "source": sources,
+            "target": targets,
+            "path": path_list,
+            "latency": latencies,
+            "time": times,
+        }
+    )
 
 
 def shortest_paths(
@@ -224,8 +256,8 @@ def gsls_for_interval(
     Returns:
         typing.Dict[int, pd.DataFrame]: DataFrame containing per-time data for gsls "chosen by the global scheduler" (lowest avg distance)
     """
-    # TODO: is this reasonable? Yes, because the global scheduler does not have any information on future communication the GS might initiate
-    # To optimize this based on the known destination could very well be interesting to analyze
+    # It is reasonable to assume that the global scheduler would optimize for distance rather than latency as it does not have any information on future communication the GS might initiate
+    # Anyways, optimizing this based on the known destination could very well be interesting
     timesteps = list(sat_interval_positions.keys())
     gsls = [
         possible_gsls(sat_interval_positions[t], gs_interval_positions[t])
@@ -299,7 +331,7 @@ def linkwise_analysis(connections: pd.DataFrame, isls: pd.DataFrame) -> pd.DataF
 
     connections["path"] = connections["path"].apply(
         lambda p: np.array(
-            [int(s.removeprefix("sat_") for s in p if not s.startswith("gs"))]
+            [int(s.removeprefix("sat_")) for s in p if not s.startswith("gs")]
         )
     )
 
@@ -316,7 +348,6 @@ def linkwise_analysis(connections: pd.DataFrame, isls: pd.DataFrame) -> pd.DataF
             mask = cond_ab | cond_ba
             linkwise.loc[mask, "used_by"] += 1
 
-    linkwise.to_csv("debug/linkwise.csv", index=False)
     return linkwise
 
 
