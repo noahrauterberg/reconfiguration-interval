@@ -45,19 +45,15 @@ def main():
                 ignore_index=True,
             )
             paths_dfs[t] = all_targets_df
-            all_targets_df.to_pickle(
-                os.path.join(config.PATHS_DIR, f"{t}.pckl", "w"), index=False
-            )
-            linkwise_df = linkwise_analysis(all_targets_df, isl_distances)
+            all_targets_df.to_pickle(os.path.join(config.PATHS_DIR, f"{t}.pckl"))
+            linkwise_df = linkwise_analysis(all_targets_df, isl_distances, t)
             linkwise_dfs[t] = linkwise_df
-            linkwise_df.to_pickle(
-                os.path.join(config.PATHS_DIR, f"{t}.pckl", "w"), index=False
-            )
+            linkwise_df.to_pickle(os.path.join(config.LINKS_DIR, f"{t}.pckl"))
 
     paths = pd.concat(paths_dfs, ignore_index=True)
-    paths.to_pickle(os.path.join(config.PATHS_DIR, "all_timesteps.pckl"), index=False)
+    paths.to_pickle(os.path.join(config.PATHS_DIR, "all_timesteps.pckl"))
     links = pd.concat(linkwise_dfs, ignore_index=True)
-    links.to_pickle(os.path.join(config.LINKS_DIR, "all_timesteps.pckl"), index=False)
+    links.to_pickle(os.path.join(config.LINKS_DIR, "all_timesteps.pckl"))
 
 
 def paths_to_df(
@@ -94,6 +90,9 @@ def paths_to_df(
             path_list[idx] = path
             latencies[idx] = latency
         else:
+            print(
+                f"this should not happen: could not find a path for {source} to {default_target} at t={time}"
+            )
             sources[idx] = source
             targets[idx] = default_target
             path_list[idx] = []
@@ -277,6 +276,7 @@ def gsls_for_interval(
         ]
         for df in gsls
     ]
+    # TODO: is this sort necessary?
     common = pd.concat(filtered_gsls).sort_values(by=["satellite", "ground_station"])
     average_distances = (
         common.groupby(["satellite", "ground_station"])["distance"].mean().reset_index()
@@ -288,7 +288,7 @@ def gsls_for_interval(
 
     ret = {}
     # Pairs of GSLs that were chosen by the global scheduler because they remain valid across the whole interval and have the lowest avg distance
-    chose_gsls = set(
+    chosen_gsls = set(
         zip(lowest_avg_dist["satellite"], lowest_avg_dist["ground_station"])
     )
     for idx, t in enumerate(timesteps):
@@ -296,11 +296,116 @@ def gsls_for_interval(
         # Filter the dfs so that they only contain chosen gsls
         ret[t] = cur[
             cur.apply(
-                lambda row: (row["satellite"], row["ground_station"]) in chose_gsls,
+                lambda row: (row["satellite"], row["ground_station"]) in chosen_gsls,
                 axis=1,
             )
         ]
+
+    # check if there are any GSs that do not have a GSL that remains valid for the whole interval
+    unassigned_gs = [
+        f"{gs['lat']}_{gs['long']}"
+        for _, gs in gs_interval_positions[timesteps[0]].iterrows()
+        if f"{gs['lat']}_{gs['long']}" not in lowest_avg_dist["ground_station"].values
+    ]
+    if not unassigned_gs:
+        return ret
+
+    # Oh no, we have GSs that could not be assigned GSLs that remain valid for the whole interval
+    unassigned_tuples = [
+        [
+            (r["satellite"], r["ground_station"])
+            for _, r in df.iterrows()
+            if r["ground_station"] in unassigned_gs
+        ]
+        for df in gsls
+    ]
+    ########
+    # LONGEST CONSECUTIVELY VALID GSLs
+    ########
+    # Idea:
+    # Get the longest remaining GSL for each timestep
+    # Maintain that connection for that length
+    # Get next longest link
+    gsls_for_t = {t: [] for t in timesteps}
+    for gs in unassigned_gs:
+        # Filter gsls for the given gs
+        possible_gsls_for_gs = [
+            [gsl for gsl in t if gsl[1] == gs] for t in unassigned_tuples
+        ]
+
+        # From here on relevant for loop
+        previous_gsls = set(possible_gsls_for_gs[0])
+        next_assignment = 0
+        for idx in range(len(timesteps)):
+            current_gsls = set(possible_gsls_for_gs[idx])
+            intersect = previous_gsls.intersection(current_gsls)
+            if intersect:  # effectively a check if intersect is not empty
+                previous_gsls = intersect
+                continue
+            # Assign GSL
+            gsl = None
+            if len(previous_gsls) == 1:
+                gsl = previous_gsls.pop()
+            else:
+                # if there are multiple gsls possible in previous_gsls, this chooses one of them
+                gsl = determine_gsl(
+                    previous_gsls, [gsls[i] for i in range(next_assignment, idx + 1)]
+                )
+            # this loop excludes idx on purpose as the gsl is not valid anymore
+            for i in range(next_assignment, idx + 1):
+                gsls_for_t[timesteps[i]].append(gsl)
+            # "reset" for next iteration
+            next_assignment = idx
+            previous_gsls = current_gsls
+
+        # Assign a GSL for the last subinterval
+        gsl = None
+        if len(previous_gsls) == 1:
+            gsl = previous_gsls.pop()
+        else:
+            gsl = determine_gsl(
+                previous_gsls, [gsls[i] for i in range(next_assignment, idx + 1)]
+            )
+        for i in range(next_assignment, idx + 1):
+            gsls_for_t[timesteps[i]].append(gsl)
+
+    # Add chosen GSLs to ret
+    for idx, t in enumerate(timesteps):
+        cur_df = gsls[idx]
+        filtered_df = cur_df[
+            cur_df.apply(
+                lambda row: (row["satellite"], row["ground_station"]) in gsls_for_t[t],
+                axis=1,
+            )
+        ]
+        ret[t] = pd.concat([ret[t], filtered_df])
+
     return ret
+
+
+def determine_gsl(
+    to_choose: typing.Set[typing.Tuple[str, str]], df_list: typing.List[pd.DataFrame]
+) -> typing.Tuple[str, str]:
+    filtered = [
+        df[
+            df.apply(
+                lambda row: (row["satellite"], row["ground_station"]) in to_choose,
+                axis=1,
+            )
+        ]
+        for df in df_list
+    ]
+    common = pd.concat(filtered)
+    avg_dist = (
+        common.groupby(["satellite", "ground_station"])["distance"].mean().reset_index()
+    )
+    lowest_avg_dist = avg_dist.loc[
+        avg_dist.groupby("ground_station")["distance"].idxmin()
+    ]
+    return (
+        lowest_avg_dist["satellite"].values[0],
+        lowest_avg_dist["ground_station"].values[0],
+    )
 
 
 def gs_pos_to_gs_list(gs_positions: pd.DataFrame) -> typing.List[str]:
@@ -310,7 +415,9 @@ def gs_pos_to_gs_list(gs_positions: pd.DataFrame) -> typing.List[str]:
     return ret
 
 
-def linkwise_analysis(connections: pd.DataFrame, isls: pd.DataFrame) -> pd.DataFrame:
+def linkwise_analysis(
+    connections: pd.DataFrame, isls: pd.DataFrame, time: int = -1
+) -> pd.DataFrame:
     """Performs a linkwise analysis on the given connections of the dataframe.
     This is limited to ISLs as GSLs are by definition only used by one GS and satellite.
 
@@ -337,8 +444,7 @@ def linkwise_analysis(connections: pd.DataFrame, isls: pd.DataFrame) -> pd.DataF
 
     for _, conn in connections.iterrows():
         path = conn["path"]
-        # The range excludes the GSLs
-        for i in range(1, len(path) - 2):
+        for i in range(0, len(path) - 1):
             cond_ab = (linkwise["node_a"] == path[i]) & (
                 linkwise["node_b"] == path[i + 1]
             )
@@ -348,10 +454,10 @@ def linkwise_analysis(connections: pd.DataFrame, isls: pd.DataFrame) -> pd.DataF
             mask = cond_ab | cond_ba
             linkwise.loc[mask, "used_by"] += 1
 
+    linkwise["time"] = time
     return linkwise
 
 
 if __name__ == "__main__":
-    main()
     # with PyCallGraph(output=GraphvizOutput()):
-    #     main()
+    main()

@@ -81,9 +81,9 @@ def run_simulation(
 
 if __name__ == "__main__":
     # Generate ground stations
-    ground_stations = []
+    ground_stations = [GroundStation(f"Custom target at half-way", 25, 0, 25)]
 
-    for long in range(0, 60, 10):
+    for long in range(0, 100, 10):
         equator = GroundStation(
             f"equator_{long}",
             0,
