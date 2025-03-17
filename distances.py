@@ -1,5 +1,5 @@
 #
-# Copyright (c) Tobias Pfandzelter. All rights reserved.
+# Copyright (c) 2025 Tobias Pfandzelter, Noah Rauterberg. All rights reserved.
 # Licensed under the MIT license. See LICENSE file in the project root for details.
 #
 
@@ -89,25 +89,11 @@ if __name__ == "__main__":
         for lat in range(-50, 60, 10):
             ground_stations.append(GroundStation(f"{lat}_{long}", lat, long, 25))
 
-    print("GROUNDSTATIONS:")
-    print(len(ground_stations))
+    print(f"Generated {len(ground_stations)} many ground stations")
 
     with concurrent.futures.ProcessPoolExecutor() as executor:
 
         for s in config.SHELLS:
-            # run_simulation(
-            #     config.STEPS,
-            #     config.INTERVAL,
-            #     int(s["planes"]),
-            #     int(s["sats"]),
-            #     float(s["inc"]),
-            #     int(s["altitude"]),
-            #     s["name"],
-            #     ground_stations,
-            #     config.DISTANCES_DIR,
-            #     config.SAT_POSITIONS_DIR,
-            #     config.GS_POSITIONS_DIR,
-            # )
             executor.submit(
                 run_simulation,
                 config.STEPS,

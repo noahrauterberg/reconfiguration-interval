@@ -16,8 +16,11 @@ graphs/
 gs-positions/
 gsls/
 links/
+links_15/
 paths/
+paths_15/
 sat-positions/
+plots/
 
 # go binaries
 caching/caching

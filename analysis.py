@@ -1,3 +1,8 @@
+#
+# Copyright (c) 2025 Noah Rauterberg. All rights reserved.
+# Licensed under the MIT license. See LICENSE file in the project root for details.
+#
+
 import numpy as np
 import pandas as pd
 import config
@@ -6,10 +11,7 @@ import typing
 import os
 import scipy.constants as const
 
-# from pycallgraph2 import PyCallGraph
-# from pycallgraph2.output import GraphvizOutput
-
-INTERVAL_LENGTH = 15
+INTERVAL_LENGTH = 1
 TOTAL_STEPS = 5_730  # one orbital period of shell 1
 
 
@@ -19,7 +21,8 @@ def main():
     linkwise_dfs = np.empty(TOTAL_STEPS, dtype=object)
 
     for step in range(0, TOTAL_STEPS, INTERVAL_LENGTH):
-        print(f"Processing step {step}")
+        if step % 150 == 0:
+            print(f"Processing step {step}")
         sat_pos, gs_pos, isl_dist = load_interval(step)
         gsls = gsls_for_interval(sat_pos, gs_pos)
 
@@ -83,7 +86,7 @@ def paths_to_df(
     for idx, (source, path) in enumerate(paths.items()):
         if path:
             distance = nx.path_weight(G, path, "weight")
-            latency = distance * const.c
+            latency = distance / const.c
 
             sources[idx] = source
             targets[idx] = path[-1]
@@ -333,7 +336,6 @@ def gsls_for_interval(
             [gsl for gsl in t if gsl[1] == gs] for t in unassigned_tuples
         ]
 
-        # From here on relevant for loop
         previous_gsls = set(possible_gsls_for_gs[0])
         next_assignment = 0
         for idx in range(len(timesteps)):
@@ -459,5 +461,14 @@ def linkwise_analysis(
 
 
 if __name__ == "__main__":
-    # with PyCallGraph(output=GraphvizOutput()):
     main()
+    print(
+        """"
+         _____   ____  _   _ ______ 
+        |  __ \ / __ \| \ | |  ____|
+        | |  | | |  | |  \| | |__   
+        | |  | | |  | | . ` |  __|  
+        | |__| | |__| | |\  | |____ 
+        |_____/ \____/|_| \_|______|
+        """
+    )

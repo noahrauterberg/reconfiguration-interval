@@ -1,7 +1,7 @@
 #
-# This file is part of optimal-leo-placement
-# (https://github.com/pfandzelter/optimal-leo-placement).
-# Copyright (c) 2021 Ben S. Kempton, Tobias Pfandzelter.
+# This file is part of reconfiguration-interval
+# (https://github.com/noahrauterberg/reconfiguration-interval).
+# Copyright (c) 2025 Ben S. Kempton, Tobias Pfandzelter, Noah Rauterberg.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
