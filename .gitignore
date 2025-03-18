@@ -21,6 +21,8 @@ paths/
 paths_15/
 sat-positions/
 plots/
+1-sec/
+15-sec/
 
 # go binaries
 caching/caching
