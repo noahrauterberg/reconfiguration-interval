@@ -34,14 +34,17 @@ def main():
     paths_df_1["latitude"] = paths_df_1["source"].apply(extract_latitude)
     paths_df_1["longitude"] = paths_df_1["source"].apply(extract_longitude)
 
-    gsl_switches_in_interval(paths_df_15)
+    # Add interval column to 15-sec
+    paths_df_15["interval"] = paths_df_15["time"] // INTERVAL_LENGTH
+
+    # gsl_switches_in_interval(paths_df_15)
     path_stability(paths_1=paths_df_1, paths_15=paths_df_15)
 
 
 def latency_cost(
     paths_1: pd.DataFrame, paths_15: pd.DataFrame, save_path: str = "latency-cost"
 ):
-    # TOOD: implement
+    # TODO: implement
     raise ("Not yet implemented")
 
 
@@ -67,27 +70,29 @@ def path_stability(
                 "path_stability": unique_paths_15.values / unique_paths_1.values,
             }
         )
-        stability_metrics.to_csv("debug/stability.csv")
+        stability_metrics.to_csv(f"debug/stability-{gs}.csv")
 
         coords = stability_metrics["source"].apply(extract_coords)
         stability_metrics[["latitude", "longitude"]] = coords.to_list()
 
-        # TODO: This could be supplemented by the average path duration
+        # TODO: This could be supplemented by the average path duration and avg. GSL lifetime
 
         plot_cdf(
             unique_paths_1,
             series2=unique_paths_15,
-            title=f"CDF for the number of unique paths to {gs}",
+            title=f"CDF for the number of unique paths to {gs} by source",
             x_label="Number of unique paths",
             save_path=f"{save_path}-unique-paths-to-{gs}",
             label="1-sec interval",
             label2="15-sec interval",
+            percentiles=[0.25, 0.5, 0.75, 0.95],
         )
         plot_cdf(
-            stability_metrics,
+            stability_metrics["path_stability"],
             title=f"CDF for the path stability to {gs}",
-            x_label="Path Stability Ratio",
-            save_path=f"{save_path}-stability-ratio-{gs}",
+            x_label="Path Stability",
+            save_path=f"{save_path}-ratio-{gs}",
+            percentiles=[0.25, 0.5, 0.75, 0.95],
         )
         plot_hist(
             data_x=stability_metrics["longitude"],
@@ -104,7 +109,6 @@ def path_stability(
 def gsl_switches_in_interval(
     df, interval_length: int = 15, save_path: str = "gsl-switches"
 ):
-    df["interval"] = df["time"] // interval_length
     df["first_hop"] = df["path"].apply(lambda x: x[0] if len(x) > 0 else -1).astype(int)
     df = df[df["first_hop"] != -1]
     gsl_switches = (
@@ -291,15 +295,28 @@ def plot_cdf(
     series2: pd.Series = None,
     label2: str = "",
     bins: int = "auto",
+    percentiles: list[float] = [0.25, 0.5, 0.75],
 ):
     plt.figure(figsize=(12, 8))
-    sns.ecdfplot(data=series, stat=stat, label=label)
+    ax = sns.ecdfplot(data=series, stat=stat, label=label)
     sns.histplot(
         data=series, stat=stat, alpha=0.4, cumulative=True, label=label, bins=bins
     )
 
+    quantiles = series.quantile(percentiles)
+    for idx, q in enumerate(quantiles):
+        ax.axvline(x=q, color="black", linestyle="--", alpha=0.4)
+        ax.text(
+            q,
+            percentiles[idx] - 0.05,
+            f"{int(percentiles[idx]*100)}%\n({q:.2f})",
+            horizontalalignment="center",
+            color="black",
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.5, pad=0.5),
+        )
+
     if series2 is not None:
-        sns.ecdfplot(data=series, stat=stat, label=label2)
+        sns.ecdfplot(data=series2, stat=stat, label=label2)
         sns.histplot(
             data=series2,
             stat=stat,
@@ -309,6 +326,17 @@ def plot_cdf(
             bins=bins,
             color="darkorange",
         )
+        quantiles = series2.quantile(percentiles)
+        for idx, q in enumerate(quantiles):
+            ax.axvline(x=q, color="orange", linestyle="--", alpha=0.4)
+            ax.text(
+                q,
+                percentiles[idx] - 0.05,
+                f"{int(percentiles[idx]*100)}%\n({q:.2f})",
+                horizontalalignment="center",
+                color="black",
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.5, pad=0.5),
+            )
         plt.legend(fontsize=10)
 
     plt.title(title)
