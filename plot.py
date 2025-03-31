@@ -8,10 +8,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# TODO: copied from analysis.py for now
-INTERVAL_LENGTH = 15
+INTERVAL_LENGTH = 30
 TOTAL_STEPS = 5_730  # one orbital period of shell 1
-TOTAL_INTERVALS = 382
+TOTAL_INTERVALS = TOTAL_STEPS // INTERVAL_LENGTH
 SERVER_GS = ["gs_0_0", "gs_25_0", "gs_50_0"]
 FIGURE_TYPE = "pdf"
 
@@ -19,96 +18,310 @@ FIGURE_TYPE = "pdf"
 def main():
     # Load data
     paths_df_1 = load_all_timesteps(1, "paths")
-    links_df_1 = load_all_timesteps(1, "links")
-
     paths_df_15 = load_all_timesteps(15, "paths")
-    links_df_15 = load_all_timesteps(15, "links")
+    paths_df_30 = load_all_timesteps(30, "paths")
 
     # Add path length
-    paths_df_15["path_length"] = paths_df_15["path"].apply(calc_path_length)
-    paths_df_1["path_length"] = paths_df_1["path"].apply(calc_path_length)
+    # paths_df_1["path_length"] = paths_df_1["path"].apply(calc_path_length)
+    # paths_df_15["path_length"] = paths_df_15["path"].apply(calc_path_length)
+    # paths_df_30["path_length"] = paths_df_30["path"].apply(calc_path_length)
 
     # Add Latitude and Longitude columns
-    paths_df_15["latitude"] = paths_df_15["source"].apply(extract_latitude)
-    paths_df_15["longitude"] = paths_df_15["source"].apply(extract_longitude)
     paths_df_1["latitude"] = paths_df_1["source"].apply(extract_latitude)
     paths_df_1["longitude"] = paths_df_1["source"].apply(extract_longitude)
+    paths_df_15["latitude"] = paths_df_15["source"].apply(extract_latitude)
+    paths_df_15["longitude"] = paths_df_15["source"].apply(extract_longitude)
+    paths_df_30["latitude"] = paths_df_30["source"].apply(extract_latitude)
+    paths_df_30["longitude"] = paths_df_30["source"].apply(extract_longitude)
 
-    # Add interval column to 15-sec
-    paths_df_15["interval"] = paths_df_15["time"] // INTERVAL_LENGTH
+    # Add interval column to reconfiguration interval dfs
+    paths_df_15["interval"] = paths_df_15["time"] // 15
+    paths_df_30["interval"] = paths_df_30["time"] // 30
 
-    # gsl_switches_in_interval(paths_df_15)
-    path_stability(paths_1=paths_df_1, paths_15=paths_df_15)
+    # gsl_switches_in_interval(paths_df_15, save_path="gsl-switches-15")
+    # gsl_switches_in_interval(paths_df_30, save_path="gsl-switches-30")
+    stability_per_gs = path_stability(
+        paths_1=paths_df_1, paths_15=paths_df_15, paths_30=paths_df_30
+    )
+    latency_costs_by_connection = latency_costs(
+        paths_1=paths_df_1, paths_15=paths_df_15, paths_30=paths_df_30
+    )
+    for gs in SERVER_GS:
+        stability_per_gs[gs].to_csv(f"debug/stability-{gs}.csv")
+    latency_costs_by_connection.to_csv("debug/latency-costs.csv")
+    plot_stability_vs_latency_costs(stability_per_gs, latency_costs_by_connection)
 
 
-def latency_cost(
-    paths_1: pd.DataFrame, paths_15: pd.DataFrame, save_path: str = "latency-cost"
+def plot_stability_vs_latency_costs(stability_per_gs, latency_costs_by_connection):
+    # Stability vs Latency-Costs
+    for gs in SERVER_GS:
+        plt.figure(figsize=(12, 8))
+        stability = stability_per_gs[gs]
+        costs = latency_costs_by_connection[latency_costs_by_connection["target"] == gs]
+        sns.scatterplot(
+            x=stability["path_stability_15_sec"],
+            y=costs["latency_costs_15"],
+            label="15-sec interval",
+            color="darkorange",
+        )
+        # sns.scatterplot(
+        #     x=stability["path_stability_30_sec"],
+        #     y=costs["latency_costs_30"],
+        #     label="30-sec interval",
+        #     color="darkgreen",
+        # )
+        plt.title(f"Path Stability vs. Latency Costs for {gs}")
+        plt.xlabel("Path Stability")
+        plt.ylabel("Latency Costs")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.legend()
+        plt.savefig(f"plots/stability-vs-latency-costs-{gs}-combined.{FIGURE_TYPE}")
+        plt.close()
+
+
+def gsl_duration(df_in):
+    df = df_in.copy()
+    df = df[df["target"] == "gs_0_0"]
+    df["first_hop"] = df["path"].apply(lambda x: x[0] if len(x) > 0 else -1).astype(int)
+    df = df[df["first_hop"] != -1]
+
+    ret = []
+    tmp = df.groupby(["interval", "source"])["first_hop"].unique().reset_index()
+    for _, item in tmp.iterrows():
+        interval_data = df[df["interval"] == item["interval"]]
+        for sat in item["first_hop"]:
+            duration = len(
+                interval_data[
+                    (interval_data["first_hop"] == sat)
+                    & (interval_data["source"] == item["source"])
+                ]
+            )
+            ret.append(
+                {
+                    "interval": item["interval"],
+                    "source": item["source"],
+                    "satellite": sat,
+                    "duration": duration,
+                }
+            )
+    return pd.DataFrame(ret)
+
+
+def latency_costs(
+    paths_1: pd.DataFrame,
+    paths_15: pd.DataFrame = None,
+    paths_30: pd.DataFrame = None,
+    save_path: str = "latency-costs",
 ):
-    # TODO: implement
-    raise ("Not yet implemented")
+    merged = pd.merge(
+        paths_15,
+        paths_30,
+        on=["source", "target", "time"],
+        suffixes=("_15", "_30"),
+    )
+    merged = pd.merge(
+        merged,
+        paths_1,
+        on=["source", "target", "time"],
+    )
+
+    merged["latency_costs_15"] = merged[f"latency_15"] - merged["latency"]
+    merged["latency_costs_30"] = merged[f"latency_30"] - merged["latency"]
+    latency_costs_by_connection = (
+        merged.groupby(["source", "target"])["latency_costs_15", "latency_costs_30"]
+        .agg(["max", "min", "mean"])
+        .reset_index()
+    )
+    intervals_15 = (
+        latency_costs_by_connection["latency_costs_15"]
+        .sort_values("mean")
+        .reset_index()
+    )
+    intervals_30 = (
+        latency_costs_by_connection["latency_costs_30"]
+        .sort_values("mean")
+        .reset_index()
+    )
+    plot_cdf(
+        [intervals_15["mean"], intervals_30["mean"]],
+        title="CDF for the Average Latency Costs by Connection",
+        x_label="Average Latency Costs",
+        save_path=f"{save_path}-by-connection-combined",
+        precision=4,
+        marker_at=[0],
+        colors=["darkorange", "green"],
+        labels=["15-sec interval", "30-sec interval"],
+        percentiles=[],
+    )
+
+    # Plot Latency Costs for 30-sec
+    plt.figure(figsize=(12, 8))
+    plt.plot(
+        intervals_30["min"],
+        label="Minimum Latency Costs",
+        color="green",
+    )
+    plt.plot(
+        intervals_30["max"],
+        label="Maximum Latency Costs",
+        color="green",
+    )
+    plt.plot(
+        intervals_30["mean"],
+        label="Average Latency Costs",
+        color="lightgreen",
+    )
+    plt.fill_between(
+        intervals_30.index,
+        intervals_30["min"],
+        intervals_30["max"],
+        alpha=0.5,
+        color="green",
+    )
+    plt.title("Latency Costs (30-sec interval)")
+    plt.xlabel("Connection ID")
+    plt.ylabel("Latency Costs")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(f"plots/{save_path}-min-max-mean-30.{FIGURE_TYPE}")
+
+    plt.figure(figsize=(12, 8))
+    plt.plot(
+        intervals_15["min"],
+        label="Minimum Latency Costs",
+        color="darkorange",
+    )
+    plt.plot(
+        intervals_15["max"],
+        label="Maximum Latency Costs",
+        color="darkorange",
+    )
+    plt.plot(
+        intervals_15["mean"],
+        label="Average Latency Costs",
+        color="orange",
+    )
+    plt.fill_between(
+        intervals_15.index,
+        intervals_15["min"],
+        intervals_15["max"],
+        alpha=0.5,
+        color="orange",
+    )
+    plt.title("Latency Costs (15-sec interval)")
+    plt.xlabel("Connection ID")
+    plt.ylabel("Latency Costs")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(f"plots/{save_path}-min-max-mean-15.{FIGURE_TYPE}")
+
+    return latency_costs_by_connection
 
 
 def path_stability(
-    paths_1: pd.DataFrame, paths_15: pd.DataFrame, save_path: str = "path-stability"
-):
+    paths_1: pd.DataFrame,
+    paths_15: pd.DataFrame = None,
+    paths_30: pd.DataFrame = None,
+    save_path: str = "path-stability",
+) -> dict[str, pd.DataFrame]:
+    ret = {}
     for gs in SERVER_GS:
-        relevant_1 = paths_1.loc[paths_1["target"] == gs]
-        relevant_15 = paths_15.loc[paths_15["target"] == gs]
+        relevant_1 = paths_1.loc[(paths_1["target"] == gs) & (paths_1["source"] != gs)]
+        relevant_15 = paths_15.loc[
+            (paths_15["target"] == gs) & (paths_15["source"] != gs)
+        ]
+        relevant_30 = paths_30.loc[
+            (paths_30["target"] == gs) & (paths_30["source"] != gs)
+        ]
 
         relevant_1["path_tuple"] = relevant_1["path"].apply(tuple)
         relevant_15["path_tuple"] = relevant_15["path"].apply(tuple)
-
+        relevant_30["path_tuple"] = relevant_30["path"].apply(tuple)
         unique_paths_1 = relevant_1.groupby("source")["path_tuple"].nunique()
         unique_paths_15 = relevant_15.groupby("source")["path_tuple"].nunique()
+        unique_paths_30 = relevant_30.groupby("source")["path_tuple"].nunique()
 
         stability_metrics = pd.DataFrame(
             {
                 "source": unique_paths_1.index.get_level_values("source"),
                 "target": gs,
-                "path_changes_15_sec": unique_paths_15.values,
                 "path_changes_1_sec": unique_paths_1.values,
-                "path_stability": unique_paths_15.values / unique_paths_1.values,
+                "path_changes_15_sec": unique_paths_15.values,
+                "path_changes_30_sec": unique_paths_30.values,
+                "path_stability_15_sec": unique_paths_15.values / unique_paths_1.values,
+                "path_stability_30_sec": unique_paths_30.values / unique_paths_1.values,
+                "avg_path_duration_1_sec": TOTAL_STEPS / unique_paths_1.values,
+                "avg_path_duration_15_sec": TOTAL_STEPS / unique_paths_15.values,
+                "avg_path_duration_30_sec": TOTAL_STEPS / unique_paths_30.values,
             }
         )
-        stability_metrics.to_csv(f"debug/stability-{gs}.csv")
-
         coords = stability_metrics["source"].apply(extract_coords)
         stability_metrics[["latitude", "longitude"]] = coords.to_list()
-
-        # TODO: This could be supplemented by the average path duration and avg. GSL lifetime
+        ret[gs] = stability_metrics
 
         plot_cdf(
-            unique_paths_1,
-            series2=unique_paths_15,
+            [unique_paths_1, unique_paths_15, unique_paths_30],
             title=f"CDF for the number of unique paths to {gs} by source",
             x_label="Number of unique paths",
-            save_path=f"{save_path}-unique-paths-to-{gs}",
-            label="1-sec interval",
-            label2="15-sec interval",
+            save_path=f"{save_path}-unique-paths-to-{gs}-combined",
             percentiles=[0.25, 0.5, 0.75, 0.95],
+            precision=0,
         )
         plot_cdf(
-            stability_metrics["path_stability"],
+            data=[
+                stability_metrics["path_stability_15_sec"],
+                stability_metrics["path_stability_30_sec"],
+            ],
             title=f"CDF for the path stability to {gs}",
             x_label="Path Stability",
-            save_path=f"{save_path}-ratio-{gs}",
+            save_path=f"{save_path}-ratio-{gs}-combined",
             percentiles=[0.25, 0.5, 0.75, 0.95],
+            colors=["darkorange", "darkgreen"],
+            labels=["15-sec interval", "30-sec interval"],
+        )
+        plot_cdf(
+            data=[
+                stability_metrics["avg_path_duration_1_sec"],
+                stability_metrics["avg_path_duration_15_sec"],
+                stability_metrics["avg_path_duration_30_sec"],
+            ],
+            title=f"CDF for the average path duration to {gs}",
+            x_label="Average Path Duration in seconds",
+            save_path=f"{save_path}-avg-path-duration-{gs}-combined",
+            percentiles=[0.25, 0.5, 0.75],
+        )
+        # Filter stability metrics for histogram to not distort the plot with gs 25,0 or the server gs itself
+        filtered = stability_metrics[
+            (stability_metrics["source"] != "gs_25_0")
+            & (stability_metrics["source"] != gs)
+        ]
+        plot_hist(
+            data_x=filtered["longitude"],
+            x_label="Longitude",
+            data_y=filtered["latitude"],
+            y_label="Latitude",
+            weight=filtered["path_stability_15_sec"],
+            weight_label="Path Stability",
+            title=f"Path Stability Distribution for Server-GS {gs} and 15-sec intervals",
+            save_path=f"{save_path}-stability-hist-{gs}-15",
         )
         plot_hist(
-            data_x=stability_metrics["longitude"],
+            data_x=filtered["longitude"],
             x_label="Longitude",
-            data_y=stability_metrics["latitude"],
+            data_y=filtered["latitude"],
             y_label="Latitude",
-            weight=stability_metrics["path_stability"],
+            weight=filtered["path_stability_30_sec"],
             weight_label="Path Stability",
-            title=f"Path Stability Distribution for Server-GS {gs}",
-            save_path=f"{save_path}-stability-hist-{gs}",
+            title=f"Path Stability Distribution for Server-GS {gs} and 30-sec intervals",
+            save_path=f"{save_path}-stability-hist-{gs}-30",
         )
+    return ret
 
 
-def gsl_switches_in_interval(
-    df, interval_length: int = 15, save_path: str = "gsl-switches"
-):
+def gsl_switches_in_interval(df, save_path: str = "gsl-switches"):
     df["first_hop"] = df["path"].apply(lambda x: x[0] if len(x) > 0 else -1).astype(int)
     df = df[df["first_hop"] != -1]
     gsl_switches = (
@@ -123,9 +336,10 @@ def gsl_switches_in_interval(
     by_source = gsl_switches.groupby(["source"]).sum()
 
     plot_cdf(
-        by_interval["gsl_switches"],
+        [by_interval["gsl_switches"]],
         title="CDF for GSL switches by Interval",
-        x_label="Interval",
+        x_label="Number of GSL Switches",
+        y_label="Proportion of Intervals",
         save_path=f"{save_path}-by-interval",
         bins=TOTAL_INTERVALS // 10,
     )
@@ -161,7 +375,7 @@ def gsl_switches_in_interval(
     )
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f"plots/{save_path}-by-source.{FIGURE_TYPE}")
+    plt.savefig(f"plots/{save_path}-by-source-{INTERVAL_LENGTH}.{FIGURE_TYPE}")
     plt.close()
 
 
@@ -228,10 +442,6 @@ def plot_rtt_distribution(df, save_path: str = None) -> None:
     plt.close()
 
 
-def route_churn(df):
-    raise ("not implemented yet")
-
-
 def network_performance(df):
     df_by_time = df.groupby(["time"]).mean()
     return {
@@ -285,59 +495,51 @@ def plot_hist(
 
 
 def plot_cdf(
-    series: pd.Series,
+    data: list[pd.Series],
     title: str,
     x_label: str,
     y_label: str = "Proportion",
-    label: str = "",
+    labels: list[str] = ["1-sec interval", "15-sec interval", "30-sec interval"],
     stat: str = "proportion",
     save_path: str = None,
-    series2: pd.Series = None,
-    label2: str = "",
     bins: int = "auto",
     percentiles: list[float] = [0.25, 0.5, 0.75],
+    precision: int = 2,
+    marker_at: list[float] = [],
+    colors: list[str] = ["blue", "darkorange", "green"],
+    bars: bool = False,
 ):
     plt.figure(figsize=(12, 8))
-    ax = sns.ecdfplot(data=series, stat=stat, label=label)
-    sns.histplot(
-        data=series, stat=stat, alpha=0.4, cumulative=True, label=label, bins=bins
-    )
+    for series, label, color, offset in zip(data, labels, colors, [-0.05, -0.05, -0.1]):
+        ax = sns.ecdfplot(data=series, stat=stat, label=label, color=color)
+        if bars:
+            sns.histplot(
+                data=series,
+                stat=stat,
+                alpha=0.4,
+                cumulative=True,
+                label=label,
+                bins=bins,
+                color=color,
+            )
 
-    quantiles = series.quantile(percentiles)
-    for idx, q in enumerate(quantiles):
-        ax.axvline(x=q, color="black", linestyle="--", alpha=0.4)
-        ax.text(
-            q,
-            percentiles[idx] - 0.05,
-            f"{int(percentiles[idx]*100)}%\n({q:.2f})",
-            horizontalalignment="center",
-            color="black",
-            bbox=dict(facecolor="white", edgecolor="none", alpha=0.5, pad=0.5),
-        )
-
-    if series2 is not None:
-        sns.ecdfplot(data=series2, stat=stat, label=label2)
-        sns.histplot(
-            data=series2,
-            stat=stat,
-            alpha=0.4,
-            cumulative=True,
-            label=label2,
-            bins=bins,
-            color="darkorange",
-        )
-        quantiles = series2.quantile(percentiles)
+        quantiles = series.quantile(percentiles)
         for idx, q in enumerate(quantiles):
-            ax.axvline(x=q, color="orange", linestyle="--", alpha=0.4)
+            ax.axvline(x=q, color=color, linestyle="--", alpha=0.4)
             ax.text(
                 q,
-                percentiles[idx] - 0.05,
-                f"{int(percentiles[idx]*100)}%\n({q:.2f})",
+                percentiles[idx] + offset,
+                f"{int(percentiles[idx]*100)}\%\n({q:.{precision}f})",
                 horizontalalignment="center",
-                color="black",
-                bbox=dict(facecolor="white", edgecolor="none", alpha=0.5, pad=0.5),
+                color=color,
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.7, pad=0.5),
             )
-        plt.legend(fontsize=10)
+
+        for marker in marker_at:
+            c = color.strip("dark") if "dark" in color else f"light{color}"
+            ax.axvline(x=marker, color=c, linestyle="--", alpha=0.4)
+
+    plt.legend()
 
     plt.title(title)
     plt.xlabel(x_label)
@@ -382,4 +584,46 @@ def load_individual_timestep(data_type, time):
 
 
 if __name__ == "__main__":
-    main()
+    plt.rcParams.update(
+        {
+            "text.usetex": True,
+            "font.family": "serif",
+            "font.serif": ["Times"],
+        }
+    )
+    plt.rcParams["font.size"] = 18
+    # for gs in SERVER_GS:
+    #     stability_per_gs[gs].to_csv(f"debug/stability-{gs}.csv")
+    # latency_costs_by_connection.to_csv("debug/latency-costs.csv")
+    stability_per_gs = {}
+    for gs in SERVER_GS:
+        stability_per_gs[gs] = pd.read_csv(f"debug/stability-{gs}.csv")
+    latency_costs_by_connection = pd.read_csv("debug/latency-costs.csv")
+    plot_stability_vs_latency_costs(stability_per_gs, latency_costs_by_connection)
+    # main()
+    # paths_df_15 = load_all_timesteps(15, "paths")
+    # paths_df_15["interval"] = paths_df_15["time"] // 15
+    # durations_15 = gsl_duration(paths_df_15)
+    # durations_15.to_csv("debug/gsl-duration-15.csv")
+    # durations_15 = pd.read_csv("debug/gsl-duration-15.csv")
+    # durations_30 = pd.read_csv("debug/gsl-duration.csv")
+
+    # plt.figure(figsize=(12, 8))
+    # sns.ecdfplot(
+    #     data=durations_15["duration"],
+    #     label="15-sec interval",
+    #     color="blue",
+    # )
+    # sns.ecdfplot(
+    #     data=durations_30["duration"],
+    #     label="30-sec interval",
+    #     color="orange",
+    # )
+    # plt.title("CDF for GSL Duration within an interval")
+    # plt.xlabel("GSL Duration")
+    # plt.ylabel("Proportion")
+    # plt.legend()
+    # plt.grid(True, alpha=0.3)
+    # plt.tight_layout()
+    # plt.savefig(f"plots/gsl-duration-cdf.{FIGURE_TYPE}")
+    # plt.close()
