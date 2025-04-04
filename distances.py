@@ -86,7 +86,7 @@ if __name__ == "__main__":
     ]
 
     for long in range(-170, 190, 10):
-        for lat in range(-50, 60, 10):
+        for lat in range(-90, 91, 10):
             ground_stations.append(GroundStation(f"{lat}_{long}", lat, long, 25))
 
     print(f"Generated {len(ground_stations)} many ground stations")

@@ -14,6 +14,12 @@ TOTAL_INTERVALS = TOTAL_STEPS // INTERVAL_LENGTH
 SERVER_GS = ["gs_0_0", "gs_25_0", "gs_50_0"]
 FIGURE_TYPE = "pdf"
 
+SERVER_GS_DICT = {
+    "gs_0_0": "GS 0° N, 0° E",
+    "gs_25_0": "GS 25° N, 0° E",
+    "gs_50_0": "GS 50° N, 0° E",
+}
+
 
 def main():
     # Load data
@@ -22,9 +28,9 @@ def main():
     paths_df_30 = load_all_timesteps(30, "paths")
 
     # Add path length
-    # paths_df_1["path_length"] = paths_df_1["path"].apply(calc_path_length)
-    # paths_df_15["path_length"] = paths_df_15["path"].apply(calc_path_length)
-    # paths_df_30["path_length"] = paths_df_30["path"].apply(calc_path_length)
+    paths_df_1["path_length"] = paths_df_1["path"].apply(calc_path_length)
+    paths_df_15["path_length"] = paths_df_15["path"].apply(calc_path_length)
+    paths_df_30["path_length"] = paths_df_30["path"].apply(calc_path_length)
 
     # Add Latitude and Longitude columns
     paths_df_1["latitude"] = paths_df_1["source"].apply(extract_latitude)
@@ -34,22 +40,24 @@ def main():
     paths_df_30["latitude"] = paths_df_30["source"].apply(extract_latitude)
     paths_df_30["longitude"] = paths_df_30["source"].apply(extract_longitude)
 
+    # Add manhattan distance
+    paths_df_1["manhattan_distance"] = paths_df_1.apply(calc_manhatten_distance, axis=1)
+    paths_df_15["manhattan_distance"] = paths_df_15.apply(
+        calc_manhatten_distance, axis=1
+    )
+    paths_df_30["manhattan_distance"] = paths_df_30.apply(
+        calc_manhatten_distance, axis=1
+    )
+
     # Add interval column to reconfiguration interval dfs
     paths_df_15["interval"] = paths_df_15["time"] // 15
     paths_df_30["interval"] = paths_df_30["time"] // 30
 
+    # rtt_variability(paths_df_1, paths_df_15, paths_df_30)
     # gsl_switches_in_interval(paths_df_15, save_path="gsl-switches-15")
     # gsl_switches_in_interval(paths_df_30, save_path="gsl-switches-30")
-    stability_per_gs = path_stability(
-        paths_1=paths_df_1, paths_15=paths_df_15, paths_30=paths_df_30
-    )
-    latency_costs_by_connection = latency_costs(
-        paths_1=paths_df_1, paths_15=paths_df_15, paths_30=paths_df_30
-    )
-    for gs in SERVER_GS:
-        stability_per_gs[gs].to_csv(f"debug/stability-{gs}.csv")
-    latency_costs_by_connection.to_csv("debug/latency-costs.csv")
-    plot_stability_vs_latency_costs(stability_per_gs, latency_costs_by_connection)
+    # _ = path_stability(paths_1=paths_df_1, paths_15=paths_df_15, paths_30=paths_df_30)
+    _ = latency_costs(paths_1=paths_df_1, paths_15=paths_df_15, paths_30=paths_df_30)
 
 
 def plot_stability_vs_latency_costs(stability_per_gs, latency_costs_by_connection):
@@ -70,7 +78,7 @@ def plot_stability_vs_latency_costs(stability_per_gs, latency_costs_by_connectio
         #     label="30-sec interval",
         #     color="darkgreen",
         # )
-        plt.title(f"Path Stability vs. Latency Costs for {gs}")
+        plt.title(f"Path Stability vs. Latency Costs for {SERVER_GS_DICT[gs]}")
         plt.xlabel("Path Stability")
         plt.ylabel("Latency Costs")
         plt.grid(True, alpha=0.3)
@@ -127,27 +135,37 @@ def latency_costs(
     )
 
     merged["latency_costs_15"] = merged[f"latency_15"] - merged["latency"]
+    merged["latency_costs_relative_15"] = merged["latency_costs_15"] / merged["latency"]
     merged["latency_costs_30"] = merged[f"latency_30"] - merged["latency"]
+    merged["latency_costs_relative_30"] = merged["latency_costs_30"] / merged["latency"]
     latency_costs_by_connection = (
-        merged.groupby(["source", "target"])["latency_costs_15", "latency_costs_30"]
+        merged.groupby(["source", "target"])[
+            "latency_costs_relative_15",
+            "latency_costs_relative_30",
+        ]
         .agg(["max", "min", "mean"])
         .reset_index()
     )
-    intervals_15 = (
-        latency_costs_by_connection["latency_costs_15"]
-        .sort_values("mean")
-        .reset_index()
-    )
-    intervals_30 = (
-        latency_costs_by_connection["latency_costs_30"]
-        .sort_values("mean")
-        .reset_index()
+    intervals_15 = latency_costs_by_connection["latency_costs_relative_15"]
+    intervals_30 = latency_costs_by_connection["latency_costs_relative_30"]
+    plot_cdf(
+        [
+            intervals_15["max"] - intervals_15["min"],
+            intervals_30["max"] - intervals_30["min"],
+        ],
+        title="CDF for the range of Relative Latency Costs by Connection",
+        x_label="Range of Relative Latency Costs",
+        labels=["15-sec interval", "30-sec interval"],
+        save_path=f"{save_path}-relative-by-connection-range",
+        precision=4,
+        marker_at=[0],
+        colors=["darkorange", "green"],
     )
     plot_cdf(
         [intervals_15["mean"], intervals_30["mean"]],
-        title="CDF for the Average Latency Costs by Connection",
-        x_label="Average Latency Costs",
-        save_path=f"{save_path}-by-connection-combined",
+        title="CDF for the Average Relative Latency Costs by Connection",
+        x_label="Average Latency Costs (seconds)",
+        save_path=f"{save_path}-relative-by-connection-combined",
         precision=4,
         marker_at=[0],
         colors=["darkorange", "green"],
@@ -180,12 +198,12 @@ def latency_costs(
         color="green",
     )
     plt.title("Latency Costs (30-sec interval)")
-    plt.xlabel("Connection ID")
-    plt.ylabel("Latency Costs")
+    plt.xlabel("Connection")
+    plt.ylabel("Relative Latency Costs")
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f"plots/{save_path}-min-max-mean-30.{FIGURE_TYPE}")
+    plt.savefig(f"plots/{save_path}-relative-min-max-mean-30.{FIGURE_TYPE}")
 
     plt.figure(figsize=(12, 8))
     plt.plot(
@@ -211,12 +229,12 @@ def latency_costs(
         color="orange",
     )
     plt.title("Latency Costs (15-sec interval)")
-    plt.xlabel("Connection ID")
-    plt.ylabel("Latency Costs")
+    plt.xlabel("Connection")
+    plt.ylabel("Relative Latency Costs")
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f"plots/{save_path}-min-max-mean-15.{FIGURE_TYPE}")
+    plt.savefig(f"plots/{save_path}-relative-min-max-mean-15.{FIGURE_TYPE}")
 
     return latency_costs_by_connection
 
@@ -251,8 +269,10 @@ def path_stability(
                 "path_changes_1_sec": unique_paths_1.values,
                 "path_changes_15_sec": unique_paths_15.values,
                 "path_changes_30_sec": unique_paths_30.values,
-                "path_stability_15_sec": unique_paths_15.values / unique_paths_1.values,
-                "path_stability_30_sec": unique_paths_30.values / unique_paths_1.values,
+                "path_stability_15_sec": 1
+                - (unique_paths_15.values / unique_paths_1.values),
+                "path_stability_30_sec": 1
+                - (unique_paths_30.values / unique_paths_1.values),
                 "avg_path_duration_1_sec": TOTAL_STEPS / unique_paths_1.values,
                 "avg_path_duration_15_sec": TOTAL_STEPS / unique_paths_15.values,
                 "avg_path_duration_30_sec": TOTAL_STEPS / unique_paths_30.values,
@@ -264,7 +284,7 @@ def path_stability(
 
         plot_cdf(
             [unique_paths_1, unique_paths_15, unique_paths_30],
-            title=f"CDF for the number of unique paths to {gs} by source",
+            title=f"CDF for the number of unique paths to {SERVER_GS_DICT[gs]} by source",
             x_label="Number of unique paths",
             save_path=f"{save_path}-unique-paths-to-{gs}-combined",
             percentiles=[0.25, 0.5, 0.75, 0.95],
@@ -275,7 +295,7 @@ def path_stability(
                 stability_metrics["path_stability_15_sec"],
                 stability_metrics["path_stability_30_sec"],
             ],
-            title=f"CDF for the path stability to {gs}",
+            title=f"CDF for the path stability to {SERVER_GS_DICT[gs]}",
             x_label="Path Stability",
             save_path=f"{save_path}-ratio-{gs}-combined",
             percentiles=[0.25, 0.5, 0.75, 0.95],
@@ -288,7 +308,7 @@ def path_stability(
                 stability_metrics["avg_path_duration_15_sec"],
                 stability_metrics["avg_path_duration_30_sec"],
             ],
-            title=f"CDF for the average path duration to {gs}",
+            title=f"CDF for the average path duration to {SERVER_GS_DICT[gs]}",
             x_label="Average Path Duration in seconds",
             save_path=f"{save_path}-avg-path-duration-{gs}-combined",
             percentiles=[0.25, 0.5, 0.75],
@@ -305,7 +325,7 @@ def path_stability(
             y_label="Latitude",
             weight=filtered["path_stability_15_sec"],
             weight_label="Path Stability",
-            title=f"Path Stability Distribution for Server-GS {gs} and 15-sec intervals",
+            title=f"Path Stability Distribution for Server-GS {SERVER_GS_DICT[gs]} and 15-sec intervals",
             save_path=f"{save_path}-stability-hist-{gs}-15",
         )
         plot_hist(
@@ -315,7 +335,7 @@ def path_stability(
             y_label="Latitude",
             weight=filtered["path_stability_30_sec"],
             weight_label="Path Stability",
-            title=f"Path Stability Distribution for Server-GS {gs} and 30-sec intervals",
+            title=f"Path Stability Distribution for Server-GS {SERVER_GS_DICT[gs]} and 30-sec intervals",
             save_path=f"{save_path}-stability-hist-{gs}-30",
         )
     return ret
@@ -398,33 +418,44 @@ def shortest_path_to_longest_path(df):
     return pd.DataFrame(ratios)
 
 
-def plot_ratios(df, save_path: str = None) -> None:
-    plt.figure(figsize=(12, 6))
-    series = df["ratio"]
-    sns.histplot(series, stat="proportion", cumulative=True, alpha=0.25)
-    sns.ecdfplot(series, stat="proportion")
-    if save_path:
-        plt.savefig(f"plots/{save_path}.{FIGURE_TYPE}")
-    plt.close()
+def rtt_variability(df_1, df_15, df_30, save_path="rtt-variability"):
+    latency_by_source_1 = (
+        df_1.groupby(["source", "target"])["latency"]
+        .agg(["min", "max", "mean"])
+        .reset_index()
+    )
+    latency_by_source_15 = (
+        df_15.groupby(["source", "target"])["latency"]
+        .agg(["min", "max", "mean"])
+        .reset_index()
+    )
+    latency_by_source_30 = (
+        df_30.groupby(["source", "target"])["latency"]
+        .agg(["min", "max", "mean"])
+        .reset_index()
+    )
 
+    latency_by_source_1["rtt_variability"] = (
+        latency_by_source_1["max"] - latency_by_source_1["min"]
+    ) / latency_by_source_1["mean"]
+    latency_by_source_15["rtt_variability"] = (
+        latency_by_source_15["max"] - latency_by_source_15["min"]
+    ) / latency_by_source_15["mean"]
+    latency_by_source_30["rtt_variability"] = (
+        latency_by_source_30["max"] - latency_by_source_30["min"]
+    ) / latency_by_source_30["mean"]
 
-def rtt_variability(df):
-    latency_by_source = df.groupby(["source"])["latency"].mean()
-    latency_by_target = df.groupby(["target"])["latency"].mean()
-    return {
-        "mean": df["latency"].mean(),
-        "std_dev": df["latency"].std(),
-        "min": df["latency"].min(),
-        "max": df["latency"].max(),
-        "latency_by_source_mean": latency_by_source.mean(),
-        "latency_by_source_std_dev": latency_by_source.std(),
-        "latency_by_source_min": latency_by_source.min(),
-        "latency_by_source_max": latency_by_source.max(),
-        "latency_by_target_mean": latency_by_target.mean(),
-        "latency_by_target_std_dev": latency_by_target.std(),
-        "latency_by_target_min": latency_by_target.min(),
-        "latency_by_target_max": latency_by_target.max(),
-    }
+    plot_cdf(
+        [
+            latency_by_source_1["rtt_variability"],
+            latency_by_source_15["rtt_variability"],
+            latency_by_source_30["rtt_variability"],
+        ],
+        title="CDF for RTT Variability",
+        x_label="RTT Variability",
+        save_path=save_path,
+        percentiles=[],
+    )
 
 
 def plot_rtt_distribution(df, save_path: str = None) -> None:
@@ -556,6 +587,14 @@ def calc_path_length(path):
     return len(path + 2)
 
 
+def calc_manhatten_distance(row):
+    coords_source = extract_coords(row["source"])
+    coords_target = extract_coords(row["target"])
+    return abs(coords_source[0] - coords_target[0]) + abs(
+        coords_source[1] - coords_target[1]
+    )
+
+
 def extract_coords(source):
     return extract_latitude(source), extract_longitude(source)
 
@@ -592,38 +631,4 @@ if __name__ == "__main__":
         }
     )
     plt.rcParams["font.size"] = 18
-    # for gs in SERVER_GS:
-    #     stability_per_gs[gs].to_csv(f"debug/stability-{gs}.csv")
-    # latency_costs_by_connection.to_csv("debug/latency-costs.csv")
-    stability_per_gs = {}
-    for gs in SERVER_GS:
-        stability_per_gs[gs] = pd.read_csv(f"debug/stability-{gs}.csv")
-    latency_costs_by_connection = pd.read_csv("debug/latency-costs.csv")
-    plot_stability_vs_latency_costs(stability_per_gs, latency_costs_by_connection)
-    # main()
-    # paths_df_15 = load_all_timesteps(15, "paths")
-    # paths_df_15["interval"] = paths_df_15["time"] // 15
-    # durations_15 = gsl_duration(paths_df_15)
-    # durations_15.to_csv("debug/gsl-duration-15.csv")
-    # durations_15 = pd.read_csv("debug/gsl-duration-15.csv")
-    # durations_30 = pd.read_csv("debug/gsl-duration.csv")
-
-    # plt.figure(figsize=(12, 8))
-    # sns.ecdfplot(
-    #     data=durations_15["duration"],
-    #     label="15-sec interval",
-    #     color="blue",
-    # )
-    # sns.ecdfplot(
-    #     data=durations_30["duration"],
-    #     label="30-sec interval",
-    #     color="orange",
-    # )
-    # plt.title("CDF for GSL Duration within an interval")
-    # plt.xlabel("GSL Duration")
-    # plt.ylabel("Proportion")
-    # plt.legend()
-    # plt.grid(True, alpha=0.3)
-    # plt.tight_layout()
-    # plt.savefig(f"plots/gsl-duration-cdf.{FIGURE_TYPE}")
-    # plt.close()
+    main()

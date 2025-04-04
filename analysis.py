@@ -12,7 +12,7 @@ import os
 import scipy.constants as const
 
 INTERVAL_LENGTH = 1
-TOTAL_STEPS = 5_730  # one orbital period of shell 1
+TOTAL_STEPS = 6_330  # one orbital period of telesat 1 + 13 sec to get full intervals
 
 
 def main():
@@ -36,6 +36,7 @@ def main():
             )
             paths_lat_25 = shortest_paths(G, gs_pos_to_gs_list(gs_positions), "gs_25_0")
             paths_lat_50 = shortest_paths(G, gs_pos_to_gs_list(gs_positions), "gs_50_0")
+            paths_lat_90 = shortest_paths(G, gs_pos_to_gs_list(gs_positions), "gs_90_0")
 
             # Convert to dfs and save results
             paths_Null_Island_df = paths_to_df(
@@ -43,8 +44,14 @@ def main():
             )
             paths_lat_25_df = paths_to_df(paths_lat_25, G, t, default_target="gs_25_0")
             paths_lat_50_df = paths_to_df(paths_lat_50, G, t, default_target="gs_50_0")
+            paths_lat_90_df = paths_to_df(paths_lat_90, G, t, default_target="gs_90_0")
             all_targets_df = pd.concat(
-                [paths_Null_Island_df, paths_lat_25_df, paths_lat_50_df],
+                [
+                    paths_Null_Island_df,
+                    paths_lat_25_df,
+                    paths_lat_50_df,
+                    paths_lat_90_df,
+                ],
                 ignore_index=True,
             )
             paths_dfs[t] = all_targets_df
@@ -93,9 +100,6 @@ def paths_to_df(
             path_list[idx] = path
             latencies[idx] = latency
         else:
-            print(
-                f"this should not happen: could not find a path for {source} to {default_target} at t={time}"
-            )
             sources[idx] = source
             targets[idx] = default_target
             path_list[idx] = []
@@ -174,9 +178,9 @@ def generate_graph(
 
 def load_interval(
     start_time: int,
-    gs_positions_dir: str = f"{config.GS_POSITIONS_DIR}/st1",
-    sat_positions_dir: str = f"{config.SAT_POSITIONS_DIR}/st1",
-    isl_distances_dir: str = f"{config.DISTANCES_DIR}/st1",
+    gs_positions_dir: str = f"{config.GS_POSITIONS_DIR}/t1",
+    sat_positions_dir: str = f"{config.SAT_POSITIONS_DIR}/t1",
+    isl_distances_dir: str = f"{config.DISTANCES_DIR}/t1",
     interval_length: int = INTERVAL_LENGTH,
 ) -> typing.Tuple[
     typing.Dict[int, pd.DataFrame],
@@ -348,7 +352,9 @@ def gsls_for_interval(
             gsl = None
             if len(previous_gsls) == 1:
                 gsl = previous_gsls.pop()
-            else:
+            elif (
+                len(previous_gsls) > 1
+            ):  # If there are no possible GSLs, we cannot assign a GSL
                 # if there are multiple gsls possible in previous_gsls, this chooses one of them
                 gsl = determine_gsl(
                     previous_gsls, [gsls[i] for i in range(next_assignment, idx + 1)]
@@ -364,7 +370,9 @@ def gsls_for_interval(
         gsl = None
         if len(previous_gsls) == 1:
             gsl = previous_gsls.pop()
-        else:
+        elif (
+            len(previous_gsls) > 1
+        ):  # If there are no possible GSLs, we cannot assign a GSL
             gsl = determine_gsl(
                 previous_gsls, [gsls[i] for i in range(next_assignment, idx + 1)]
             )

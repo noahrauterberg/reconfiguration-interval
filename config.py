@@ -28,7 +28,8 @@ MODEL = "SGP4"
 INTERVAL = 1
 
 # total length of the simulation in seconds
-STEPS = 5_760  # longest orbital period for Starlink shells + a bit to have a multiple of 15 seconds
+# STEPS = 5_760  # longest orbital period for Starlink shells + a bit to have a multiple of 15 seconds
+STEPS = 6_330
 
 # speed of light in km/s
 C = scipy.constants.speed_of_light / 1_000.0
@@ -52,13 +53,21 @@ RESULTS_FILE = os.path.join(__root, "results.csv")
 
 # constellation shells to consider
 SHELLS = [
-    {  # 1,584 satellites
-        "name": "st1",
-        "pretty_name": "Starlink 1",
-        "planes": 72,
-        "sats": 22,
-        "altitude": 550,
-        "inc": 53.0,
+    # {  # 1,584 satellites
+    #     "name": "st1",
+    #     "pretty_name": "Starlink 1",
+    #     "planes": 72,
+    #     "sats": 22,
+    #     "altitude": 550,
+    #     "inc": 53.0,
+    # },
+    {  # 351 satellites
+        "name": "t1",
+        "pretty_name": "Telesat 1",
+        "planes": 27,
+        "sats": 13,
+        "altitude": 1_015,
+        "inc": 98.98,
     },
     # {  # 1,584 satellites
     #     "name": "st2",
